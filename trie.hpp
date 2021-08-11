@@ -120,6 +120,12 @@ class trie {
       }
     }
 
+    constexpr trie(std::initializer_list<std::pair<std::string_view, T>> xs) {
+      for (auto& [key, val] : xs) {
+        emplace(std::move(key), std::move(val));
+      }
+    }
+
     constexpr auto get_if(std::string_view key) -> T* {
       if (key.size() == 0) {
         if (here) {

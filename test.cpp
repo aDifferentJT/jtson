@@ -73,6 +73,8 @@ void print_list(list const & xs) {
 constexpr auto test() {
   using namespace json::literals;
 
+  auto obj2 = json::parse("[null, \"foo\", false, true, {foo:true, \"bar 2\":false}]");
+
   auto obj = json::object
     { std::pair{"tag", "foo"_jstr}
     , std::pair{"x", 42}
@@ -111,6 +113,9 @@ int main() {
 
   [[maybe_unused]] constexpr auto x = test();
 
+  auto obj2 = json::parse("[null, \"foo\", false, true, {foo:true, \"bar 2\":false}]");
+  std::cout << obj2 << '\n';
+
   auto obj = json::object
     { std::pair{"tag", "foo"_jstr}
     , std::pair{"x", 42}
@@ -125,6 +130,8 @@ int main() {
     >{obj};
 
   std::cout << obj << '\n';
+  pretty(std::cout, obj);
+  std::cout << '\n';
 
   auto typed_union = json::typed::discriminated_union<"tag", json::typed::union_case<"foo", json::typed::field<"x", long>>, json::typed::union_case<"bar", json::typed::field<"y", json::value>>>{json::typed::union_case<"foo", json::typed::field<"x", long>>{json::typed::field<"x", long>{42}}};
 

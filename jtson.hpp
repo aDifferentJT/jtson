@@ -49,12 +49,24 @@ namespace {
 
   template <std::size_t, typename T>
   struct indexed_base_class : T {};
-
 }
 
 namespace json {
+  void pretty
+    ( std::ostream& os
+    , auto const & x
+    , std::string const & inline_indent = ""
+    , [[maybe_unused]] std::string const & first_indent = ""
+    , [[maybe_unused]] std::string const & rest_indent = "\n"
+    )
+  {
+    auto flags = os.flags();
+    os << inline_indent << std::boolalpha << x;
+    os.flags(flags);
+  }
+
   struct array;
-  class object;
+  struct object;
 
   struct null {
     friend auto operator<<(std::ostream& os, null) -> std::ostream& {
@@ -198,10 +210,11 @@ namespace json {
 
         constexpr basic_value(int x) : basic_value{static_cast<long>(x)} {
           static_assert(ptr::is_owning, "Cannot construct view from wrong type");
-        };
+        }
         constexpr basic_value(char const * x) : basic_value{json::string{x}} {
           static_assert(ptr::is_owning, "Cannot construct view from wrong type");
-        };
+        }
+        constexpr basic_value(bool x) : datum{ptr::construct(x)} {};
 
         constexpr auto is_null() const {
           return datum.template holds<ptr_t<null>>();
@@ -264,7 +277,25 @@ namespace json {
         }
 
         friend constexpr auto operator<<(std::ostream& os, basic_value const & val) -> std::ostream& {
-          return val.datum.template visit<std::ostream&>([&](auto const & x) -> std::ostream& { return os << *x; });
+          return val.datum.template visit<std::ostream&>
+            ( [&](auto const & x) -> std::ostream& {
+                auto flags = os.flags();
+                os << std::boolalpha << *x;
+                os.flags(flags);
+                return os;
+              }
+            );
+        } 
+
+        friend void pretty
+          ( std::ostream& os
+          , basic_value const & val
+          , std::string const & inline_indent = ""
+          , std::string const & first_indent = ""
+          , std::string const & rest_indent = "\n"
+          )
+        {
+          return val.datum.template visit<void>([&](auto const & x) { pretty(os, *x, inline_indent, first_indent, rest_indent); });
         } 
     };
   }
@@ -296,44 +327,235 @@ namespace json {
       os << "]";
       return os;
     }
+
+    friend void pretty
+      ( std::ostream& os
+      , array const & arr
+      , [[maybe_unused]] std::string const & inline_indent = ""
+      , std::string const & first_indent = ""
+      , std::string const & rest_indent = "\n"
+      )
+    {
+      auto it = arr.begin();
+      if (it != arr.end()) {
+        pretty(os, *it, first_indent + "[ ", first_indent + "[ ", rest_indent + "  ");
+        ++it;
+        for (; it != arr.end(); ++it) {
+          pretty(os, *it, first_indent + ", ", first_indent + ", ", rest_indent + "  ");
+        }
+        os << rest_indent << "]";
+      } else {
+        os << first_indent << "[]";
+      }
+    }
   };
 
-  class object {
-    private:
-      trie<value> data;
+  namespace impl {
+    constexpr auto is_initial_ident_char(char c) {
+      return c == '_' || ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z');
+    }
 
-    public:
-      constexpr object(object&) = default;
-      constexpr object(object const &) = default;
-      constexpr object& operator=(object const &) = default;
-      constexpr object(object&&) = default;
-      constexpr object& operator=(object&&) = default;
+    constexpr auto is_ident_char(char c) {
+      return is_initial_ident_char(c) || ('9' <= c && c <= '9');
+    }
+  }
 
-      constexpr object(auto ...args) {
-        ([&] {
-          auto& [key, val] = args;
-          data.emplace(std::move(key), std::move(val));
-        }(), ...);
+  struct object : trie<value> {
+    using trie<value>::trie;
+
+    friend auto operator<<(std::ostream& os, object const & obj) -> std::ostream& {
+      os << "{";
+      auto it = obj.begin();
+      if (it != obj.end()) {
+        os << '"' << it->first << '"' << ':' << it->second;
+        ++it;
       }
-
-      constexpr auto get_if(std::string_view key) const -> value const * {
-        return data.get_if(key);
+      for (; it != obj.end(); ++it) {
+        os << ",\"" << it->first << '"' << ':' << it->second;
       }
+      os << "}";
+      return os;
+    }
 
-      friend auto operator<<(std::ostream& os, object const & obj) -> std::ostream& {
-        os << "{";
-        auto it = obj.data.begin();
-        if (it != obj.data.end()) {
-          os << it->first << ":" << it->second;
-          ++it;
-        }
-        for (; it != obj.data.end(); ++it) {
-          os << "," << it->first << ":" << it->second;
-        }
-        os << "}";
-        return os;
+    friend void pretty
+      ( std::ostream& os
+      , object const & obj
+      , [[maybe_unused]] std::string const & inline_indent = ""
+      , std::string const & first_indent = ""
+      , std::string const & rest_indent = "\n"
+      )
+    {
+      os << first_indent << "{";
+      auto it = obj.begin();
+      if (it != obj.end()) {
+        os << " \"" << it->first << "\" :";
+        pretty(os, it->second, " ", rest_indent + "  ", rest_indent + "  ");
+        ++it;
       }
+      for (; it != obj.end(); ++it) {
+        os << rest_indent << ", \"" << it->first << "\" :";
+        pretty(os, it->second, " ", rest_indent + "  ", rest_indent + "  ");
+      }
+      os << rest_indent << "}";
+    }
   };
+
+  struct parse_error : std::runtime_error {
+    std::string_view where;
+
+    parse_error(std::string const & what, std::string_view where)
+      : std::runtime_error{what + ": \"" + std::string(where.substr(0, 10)) + "\""}
+      , where{where}
+      {}
+  };
+
+  namespace impl {
+    constexpr void eat_whitespace(std::string_view& str) {
+      while (true) {
+        if (str.empty()) { return; }
+        switch (str[0]) {
+          case ' ':
+          case '\n':
+            str = str.substr(1);
+          default: return;
+        }
+      }
+    }
+
+    constexpr auto parse(std::string_view& str) -> json::value {
+      while (true) {
+        if (str.empty()) {
+          throw parse_error{"Empty string", str};
+        }
+        eat_whitespace(str);
+        switch (str[0]) {
+          case 'n':
+            if (str[1] == 'u' && str[2] == 'l' && str[3] == 'l') {
+              str = str.substr(4);
+              return null{};
+            } else {
+              throw parse_error{"Saw 'n', expected \"null\"", str};
+            }
+          case '+':
+          case '-':
+          case '0':
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+          case '6':
+          case '7':
+          case '8':
+          case '9':
+            throw parse_error{"Unimplemented parsing numbers", str}; // TODO
+          case '"':
+            {
+              str = str.substr(1);
+              auto i = str.find('"');
+              auto str2 = str.substr(0, i);
+              str = str.substr(i + 1);
+              return string{str2};
+            }
+          case 'f':
+            if (str[1] == 'a' && str[2] == 'l' && str[3] == 's' && str[4] == 'e') {
+              str = str.substr(5);
+              return false;
+            } else {
+              throw parse_error{"Saw 'f', expected \"false\"", str};
+            }
+          case 't':
+            if (str[1] == 'r' && str[2] == 'u' && str[3] == 'e') {
+              str = str.substr(4);
+              return true;
+            } else {
+              throw parse_error{"Saw 't', expected \"true\"", str};
+            }
+          case '[':
+            {
+              str = str.substr(1);
+              auto arr = array{};
+              while (true) {
+                eat_whitespace(str);
+                if (str[0] == ']') {
+                  str = str.substr(1);
+                  return arr;
+                }
+                arr.push_back(parse(str));
+                eat_whitespace(str);
+                switch (str[0]) {
+                  case ',':
+                    str = str.substr(1);
+                    break;
+                  case ']':
+                    str = str.substr(1);
+                    return arr;
+                  default:
+                    throw parse_error{"Expected ',' or ']'", str};
+                }
+              }
+            }
+          case '{':
+            {
+              str = str.substr(1);
+              auto obj = object{};
+              while (true) {
+                eat_whitespace(str);
+                if (str[0] == '}') {
+                  str = str.substr(1);
+                  return obj;
+                }
+                auto field = [&] {
+                  if (str[0] == '"') {
+                    str = str.substr(1);
+                    auto i = str.find('"');
+                    auto field = str.substr(0, i);
+                    str = str.substr(i + 1);
+                    return field;
+                  } else if (is_initial_ident_char(str[0])) {
+                    auto field = str;
+                    str = str.substr(1);
+                    auto field_end = std::find_if_not(str.begin(), str.end(), is_ident_char);
+                    field = field.substr(0, field_end - field.begin());
+                    str = str.substr(field_end - str.begin());
+                    return field;
+                  } else {
+                    throw parse_error{"Expected a field name", str};
+                  }
+                }();
+                eat_whitespace(str);
+                if (str[0] != ':') {
+                  throw parse_error{"Expected ':'", str};
+                }
+                str = str.substr(1);
+                obj.emplace(field, parse(str));
+                eat_whitespace(str);
+                switch (str[0]) {
+                  case ',':
+                    str = str.substr(1);
+                    break;
+                  case '}':
+                    str = str.substr(1);
+                    return obj;
+                  default:
+                    throw parse_error{"Expected ',' or '}'", str};
+                }
+              }
+            }
+          default:
+            throw parse_error{"Unexpected character", str};
+        }
+      }
+    }
+  }
+
+  constexpr auto parse(std::string_view str) -> json::value {
+    auto res = impl::parse(str);
+    if (!str.empty()) {
+      throw parse_error{"Finished parsing but haven't reached the end of the string", str};
+    }
+    return res;
+  }
 
   namespace typed {
     struct parsed_wrong_type : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -447,6 +669,24 @@ namespace json {
     template <typename T>
     struct in_context_t<vector_constexpr<T>> {
       template <impl::is_context Context> using type = vector_constexpr<in_context<Context, T>>;
+    };
+
+    template <typename T>
+    struct parse_t<trie<T>> {
+      constexpr auto operator()(json::value_const_view val) -> trie<T> {
+        if (auto xs = val.as_object()) {
+          return *xs;
+        } else {
+          throw parsed_wrong_type{"Expected an array, got "s + std::string{val.debug_type()}};
+        }
+      }
+    };
+
+    constexpr auto untyped(trie<auto> x) -> json::object { return x; }
+
+    template <typename T>
+    struct in_context_t<trie<T>> {
+      template <impl::is_context Context> using type = trie<in_context<Context, T>>;
     };
 
     template <string_literal Name, typename T>

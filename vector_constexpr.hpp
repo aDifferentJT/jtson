@@ -17,21 +17,39 @@ class vector_constexpr : private Allocator {
 
     constexpr void exponential_resize() {
       static_assert(std::is_nothrow_move_constructible_v<T>, "Elements must be nothrow move constructible");
-      auto new_data = this->allocate(_capacity * 2);
+      auto new_capacity = std::max(static_cast<std::size_t>(1), _capacity * 2);
+      auto new_data = this->allocate(new_capacity);
       auto it = new_data;
       for (auto& x : *this) {
         std::construct_at(it++, std::move(x));
       }
-      this->deallocate(_data, _capacity);
+      if (_data) {
+        this->deallocate(_data, _capacity);
+      }
       _data = new_data;
-      _capacity *= 2;
+      _capacity = new_capacity;
     }
 
   public:
     using value_type = T;
 
-    constexpr auto operator[](std::size_t i)       -> T       & { return _data[i]; }
-    constexpr auto operator[](std::size_t i) const -> T const & { return _data[i]; }
+    constexpr auto operator[](std::size_t i) -> T & {
+      if (std::is_constant_evaluated()) {
+        if (i < 0 || i >= _size) {
+          throw std::out_of_range{};
+        }
+      }
+      return _data[i];
+    }
+
+    constexpr auto operator[](std::size_t i) const -> T const & {
+      if (std::is_constant_evaluated()) {
+        if (i < 0 || i >= _size) {
+          throw std::out_of_range{};
+        }
+      }
+      return _data[i];
+    }
 
     constexpr auto data()       -> T       * { return _data; }
     constexpr auto data() const -> T const * { return _data; }
@@ -65,7 +83,11 @@ class vector_constexpr : private Allocator {
     }
 
     constexpr vector_constexpr(vector_constexpr const & that) : vector_constexpr{that.size(), static_cast<Allocator const &>(that)} {
-      std::copy(that.begin(), that.end(), this->begin());
+      auto it = _data;
+      for (auto& x : that) {
+        std::construct_at(it++, std::move(x));
+      }
+      _size = that.size();
     }
 
     constexpr vector_constexpr& operator=(vector_constexpr const & that) {
@@ -101,6 +123,7 @@ class vector_constexpr : private Allocator {
         exponential_resize();
       }
       std::construct_at(&_data[_size], x);
+      _size += 1;
     }
 
     constexpr void push_back(T&& x) {
@@ -108,6 +131,7 @@ class vector_constexpr : private Allocator {
         exponential_resize();
       }
       std::construct_at(&_data[_size], std::move(x));
+      _size += 1;
     }
 
     constexpr void emplace_back(auto&& ...args) {
@@ -115,6 +139,7 @@ class vector_constexpr : private Allocator {
         exponential_resize();
       }
       std::construct_at(&_data[_size], std::forward<decltype(args)>(args)...);
+      _size += 1;
     }
 };
 
