@@ -19,6 +19,7 @@
 
 #include "trie.hpp"
 #include "unique_ptr_constexpr.hpp"
+#include "unique_ptr_soo.hpp"
 #include "variant_constexpr.hpp"
 #include "vector_constexpr.hpp"
 
@@ -49,83 +50,6 @@ namespace {
   template <std::size_t, typename T>
   struct indexed_base_class : T {};
 
-  template <std::size_t size, typename T>
-  class unique_ptr_soo {
-    private:
-      std::array<uint8_t, size> small;
-      T* data;
-      auto (*copyConstructor)(uint8_t*, T const *) -> T*;
-      auto (*moveConstructor)(uint8_t*, T*) -> T*;
-      void (*destructor)(T*);
-
-      unique_ptr_soo() = default;
-    public:
-      template <typename U>
-      unique_ptr_soo(U x) {
-        if constexpr (sizeof(U) <= size) {
-          data = new(small.data()) U{std::move(x)};
-          copyConstructor = [](uint8_t* small, T const * that) {
-            return static_cast<T*>(new(small) U{*static_cast<U const *>(that)});
-          };
-          moveConstructor = [](uint8_t* small, T* that) {
-            return static_cast<T*>(new(small) U{std::move(*static_cast<U*>(that))});
-          };
-          destructor = [](T* y) { static_cast<U*>(y)->~U(); };
-        } else {
-          data = new U{std::move(x)};
-          copyConstructor = [](uint8_t*, T const * that) {
-            return static_cast<T*>(new U{*static_cast<U const *>(that)});
-          };
-          moveConstructor = [](uint8_t*, T* that) {
-            return static_cast<T*>(new U{std::move(*static_cast<U*>(that))});
-          };
-          destructor = [](T* y) { delete static_cast<U*>(y); };
-        }
-      }
-
-      unique_ptr_soo(unique_ptr_soo const & that)
-        : data{that.copyConstructor(small.data(), that.get())}
-        , copyConstructor{that.copyConstructor}
-        , moveConstructor{that.moveConstructor}
-        , destructor{that.destructor}
-        {}
-
-      unique_ptr_soo& operator=(unique_ptr_soo const & that) {
-        if (this != &that) {
-          this->destructor(this->data);
-          this->data = that.copyConstructor(this->small.data(), that.data);
-          this->copyConstructor = that.copyConstructor;
-          this->moveConstructor = that.moveConstructor;
-          this->destructor = that.destructor;
-        }
-        return *this;
-      }
-
-      unique_ptr_soo(unique_ptr_soo&& that)
-        : data{that.moveConstructor(small.data(), that.get())}
-        , copyConstructor{that.copyConstructor}
-        , moveConstructor{that.moveConstructor}
-        , destructor{that.destructor}
-        {}
-
-      unique_ptr_soo& operator=(unique_ptr_soo&& that) {
-        if (this != &that) {
-          this->destructor(this->data);
-          this->data = that.moveConstructor(this->small.data(), that.data);
-          this->copyConstructor = that.copyConstructor;
-          this->moveConstructor = that.moveConstructor;
-          this->destructor = that.destructor;
-        }
-        return *this;
-      }
-
-      ~unique_ptr_soo() {
-        destructor(data);
-      }
-
-      auto get()       -> T       * { return data; }
-      auto get() const -> T const * { return data; }
-  };
 }
 
 namespace json {
@@ -141,7 +65,7 @@ namespace json {
   // TODO delegate to std::string once constexpr std::string is available
   class string {
     private:
-      static constexpr auto empty = "";
+      static constexpr char empty[] = "";
       char const * data;
       std::size_t size;
 
@@ -223,7 +147,7 @@ namespace json {
     };
 
     template <typename ptr>
-    class value {
+    class basic_value {
       private:
         template <typename T>
         using ptr_t = typename ptr::template type<T>;
@@ -242,40 +166,40 @@ namespace json {
           variant_type datum;
 
         template <typename>
-        friend class value;
+        friend class basic_value;
 
       public:
-        constexpr value(value const &) requires ptr::is_trivially_copy_constructible = default;
+        constexpr basic_value(basic_value const &) requires ptr::is_trivially_copy_constructible = default;
 
-        constexpr value(value const & that)
+        constexpr basic_value(basic_value const & that)
           : datum{that.datum.template visit<variant_type>([](auto& x) -> variant_type { return variant_type{ptr::construct(*x)}; })}
           {}
 
         template <typename ptr2>
-        constexpr value(value<ptr2> & that)
+        constexpr basic_value(basic_value<ptr2> & that)
           : datum{that.datum.template visit<variant_type>([](auto& x) -> variant_type { return variant_type{ptr::construct(*x)}; })}
           {}
 
         template <typename ptr2>
-        constexpr value(value<ptr2> const & that)
+        constexpr basic_value(basic_value<ptr2> const & that)
           : datum{that.datum.template visit<variant_type>([](auto& x) -> variant_type { return variant_type{ptr::construct(*x)}; })}
           {}
 
-        constexpr value& operator=(value const & that) {
+        constexpr basic_value& operator=(basic_value const & that) {
           auto tmp = that;
           std::swap(*this, tmp);
           return *this;
         }
 
-        constexpr value(value&&) = default;
-        constexpr value& operator=(value&&) = default;
+        constexpr basic_value(basic_value&&) = default;
+        constexpr basic_value& operator=(basic_value&&) = default;
 
-        constexpr value(auto&& x) requires (variant_type::template is_of_variant<ptr_t<std::decay_t<decltype(x)>>>) : datum{ptr::construct(std::forward<decltype(x)>(x))} {};
+        constexpr basic_value(auto&& x) requires (variant_type::template is_of_variant<ptr_t<std::decay_t<decltype(x)>>>) : datum{ptr::construct(std::forward<decltype(x)>(x))} {};
 
-        constexpr value(int x) : value{static_cast<long>(x)} {
+        constexpr basic_value(int x) : basic_value{static_cast<long>(x)} {
           static_assert(ptr::is_owning, "Cannot construct view from wrong type");
         };
-        constexpr value(char const * x) : value{json::string{x}} {
+        constexpr basic_value(char const * x) : basic_value{json::string{x}} {
           static_assert(ptr::is_owning, "Cannot construct view from wrong type");
         };
 
@@ -339,17 +263,24 @@ namespace json {
               );
         }
 
-        friend constexpr auto operator<<(std::ostream& os, value const & val) -> std::ostream& {
+        friend constexpr auto operator<<(std::ostream& os, basic_value const & val) -> std::ostream& {
           return val.datum.template visit<std::ostream&>([&](auto const & x) -> std::ostream& { return os << *x; });
         } 
     };
   }
 
-  using value = impl::value<impl::_unique_ptr_constexpr>;
-  using value_mutable_view = impl::value<impl::raw_ptr>;
-  using value_const_view = impl::value<impl::const_raw_ptr>;
+  using value = impl::basic_value<impl::_unique_ptr_constexpr>;
+  using value_mutable_view = impl::basic_value<impl::raw_ptr>;
+  using value_const_view = impl::basic_value<impl::const_raw_ptr>;
 
   struct array : vector_constexpr<value> {
+    constexpr array(array&) = default;
+    constexpr array& operator=(array&) = default;
+    constexpr array(array const &) = default;
+    constexpr array& operator=(array const &) = default;
+    constexpr array(array&&) = default;
+    constexpr array& operator=(array&&) = default;
+
     constexpr array(std::convertible_to<value> auto&& ...vals) : vector_constexpr<value>{std::forward<decltype(vals)>(vals)...} {}
 
     friend auto operator<<(std::ostream& os, array const & arr) -> std::ostream& {
@@ -559,7 +490,7 @@ namespace json {
       private:
         using type = Context::template lookup<Ident>;
 
-        std::unique_ptr<type> datum;
+        unique_ptr_constexpr<type> datum;
 
       public:
         static constexpr auto name = Name;
@@ -571,7 +502,7 @@ namespace json {
             { [&] {
                 if (auto x = obj.get_if(Name)) {
                   try {
-                    return new type{parse<type>(*x)};
+                    return make_unique_constexpr<type>(parse<type>(*x));
                   } catch (parsed_wrong_type const & e) {
                     throw parsed_wrong_type{"When parsing field: "s + std::string{Name} + "\n"s + e.what()};
                   }
@@ -582,9 +513,9 @@ namespace json {
             }
           {}
 
-        constexpr auto get_field(lift_to_type<Name>) &       -> auto &       { return datum; }
-        constexpr auto get_field(lift_to_type<Name>) const & -> auto const & { return datum; }
-        constexpr auto get_field(lift_to_type<Name>) &&      -> auto &&      { return datum; }
+        constexpr auto get_field(lift_to_type<Name>) &       -> auto &       { return *datum; }
+        constexpr auto get_field(lift_to_type<Name>) const & -> auto const & { return *datum; }
+        constexpr auto get_field(lift_to_type<Name>) &&      -> auto &&      { return *datum; }
     };
 
     template <string_literal Name, string_literal Ident>
@@ -965,7 +896,7 @@ namespace json {
     };
 
     struct any {
-      auto operator()(value_const_view val) const -> bool {
+      auto operator()(value_const_view) const -> bool {
         return true;
       }
     };

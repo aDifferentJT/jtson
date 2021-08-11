@@ -48,6 +48,8 @@ class vector_constexpr : private Allocator {
     friend constexpr void swap(vector_constexpr& lhs, vector_constexpr& rhs) {
       std::swap(lhs._data, rhs._data);
       std::swap(lhs._size, rhs._size);
+      std::swap(lhs._capacity, rhs._capacity);
+      std::swap(static_cast<Allocator&>(lhs), static_cast<Allocator&>(rhs));
     }
 
     constexpr vector_constexpr(Allocator allocator = {}) : Allocator{std::move(allocator)}, _data{nullptr}, _size{0}, _capacity{0} {}
@@ -62,7 +64,7 @@ class vector_constexpr : private Allocator {
       _size = xs.size();
     }
 
-    constexpr vector_constexpr(vector_constexpr const & that) : vector_constexpr{that.size(), that} {
+    constexpr vector_constexpr(vector_constexpr const & that) : vector_constexpr{that.size(), static_cast<Allocator const &>(that)} {
       std::copy(that.begin(), that.end(), this->begin());
     }
 
@@ -73,7 +75,8 @@ class vector_constexpr : private Allocator {
     }
 
     constexpr vector_constexpr(vector_constexpr&& that)
-      : _data{std::exchange(that._data, nullptr)}
+      : Allocator{static_cast<Allocator const &>(that)}
+      , _data{std::exchange(that._data, nullptr)}
       , _size{std::exchange(that._size, 0)}
       , _capacity{std::exchange(that._capacity, 0)}
       {}

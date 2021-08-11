@@ -21,23 +21,26 @@ class trie {
     constexpr trie() = default;
 
     constexpr trie(trie const & that)
-      : here{make_unique_constexpr<T>(that.here)}
+      : here{that.here.copy()}
       , nexts
         { [&] <std::size_t ...Is> (std::index_sequence<Is...>) {
-            return std::array
-              { [&]() -> unique_ptr_constexpr<trie> {
-                  if (auto& next = std::get<Is>(that.nexts)) {
-                    return make_unique_constexpr<trie>(*next);
-                  } else {
-                    return nullptr;
-                  }
-                }()...
-              };
+            return std::array{std::get<Is>(that.nexts).copy()...};
           }(std::make_index_sequence<factor>{})
         }
       {}
 
-    constexpr trie(trie&&) = default;
+    constexpr trie& operator=(trie const &) = delete; // TODO
+
+    // TODO compiler bug?
+    constexpr trie(trie&& that)
+      : here{std::move(that.here)}
+      , nexts
+        { [&] <std::size_t ...Is> (std::index_sequence<Is...>) {
+            return std::array{std::get<Is>(std::move(that.nexts))...};
+          }(std::make_index_sequence<factor>{})
+        }
+      {}
+
     constexpr trie& operator=(trie&&) = default;
 
     class const_it {
@@ -106,6 +109,7 @@ class trie {
 
     constexpr void emplace(std::string_view key, auto&& ...args) {
       if (key.size() == 0) {
+        if (here) { throw 0; /* TODO */ }
         here = make_unique_constexpr<T>(std::forward<decltype(args)>(args)...);
       } else {
         auto& next = nexts[static_cast<unsigned char>(key[0])];

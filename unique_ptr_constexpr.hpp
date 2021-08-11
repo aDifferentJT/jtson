@@ -20,9 +20,9 @@ class unique_ptr_constexpr {
     unique_ptr_constexpr(unique_ptr_constexpr const &) = delete;
     unique_ptr_constexpr& operator=(unique_ptr_constexpr const &) = delete;
 
-    constexpr unique_ptr_constexpr(unique_ptr_constexpr&& that) : data{std::exchange(that.data, nullptr)} {}
+    constexpr unique_ptr_constexpr(unique_ptr_constexpr&& that) noexcept : data{std::exchange(that.data, nullptr)} {}
 
-    constexpr unique_ptr_constexpr& operator=(unique_ptr_constexpr&& that) {
+    constexpr unique_ptr_constexpr& operator=(unique_ptr_constexpr&& that) noexcept {
       auto tmp = std::move(that);
       swap(*this, tmp);
       return *this;
@@ -43,6 +43,14 @@ class unique_ptr_constexpr {
 
     template <typename>
     friend constexpr auto make_unique_constexpr(auto&& ...);
+
+    constexpr auto copy() const -> unique_ptr_constexpr {
+      if (data) {
+        return make_unique_constexpr<T>(*data);
+      } else {
+        return nullptr;
+      }
+    }
 };
 
 template <typename T>

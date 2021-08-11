@@ -1,6 +1,75 @@
 
 #include "jtson.hpp"
 
+using list =
+  json::typed::context
+  < json::typed::decl
+    < "obj"
+    , json::typed::rec_discriminated_union
+      < "tag"
+      , json::typed::rec_union_case<"nil">
+      , json::typed::rec_union_case
+        < "cons"
+        , json::typed::field<"x", long>
+        , json::typed::rec_field<"xs", "obj">
+        >
+      >
+    >
+  >::lookup<"obj">;
+
+constexpr auto make_list() -> list {
+  return json::typed::parse<list>
+    ( json::object
+      { std::pair{"tag", "cons"}
+      , std::pair{"x", 3}
+      , std::pair
+        { "xs"
+        , json::object
+          { std::pair{"tag", "cons"}
+          , std::pair{"x", 1}
+          , std::pair
+            { "xs"
+            , json::object
+              { std::pair{"tag", "cons"}
+              , std::pair{"x", 4}
+              , std::pair
+                { "xs"
+                , json::object
+                  { std::pair{"tag", "cons"}
+                  , std::pair{"x", 1}
+                  , std::pair
+                    { "xs"
+                    , json::object
+                      { std::pair{"tag", "cons"}
+                      , std::pair{"x", 5}
+                      , std::pair
+                        { "xs"
+                        , json::object{std::pair{"tag", "nil"}}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    );
+}
+
+void print_list(list const & xs) {
+  xs.match<void>
+    ( json::typed::match_case<"nil">([](auto const &) {})
+    , json::typed::match_case<"cons">
+      ( [](auto const & obj) {
+          std::cout << obj.template get<"x">() << ',';
+          print_list(obj.template get<"xs">());
+        }
+      )
+    );
+}
+
 constexpr auto test() {
   using namespace json::literals;
 
@@ -31,6 +100,8 @@ constexpr auto test() {
     , json::typed::match_case<"bar">
       ([](json::typed::object<json::typed::field<"y", json::value>>) {})
     );
+
+  auto typed_rec = make_list();
 
   return typed_obj.get<"x">();
 }
@@ -81,60 +152,9 @@ int main() {
 
   auto string = std::string{"foo"_jstr};
 
-  auto typed_rec =
-    json::typed::parse
-      < json::typed::context
-        < json::typed::decl
-          < "obj"
-          , json::typed::rec_discriminated_union
-            < "tag"
-            , json::typed::rec_union_case<"nil">
-            , json::typed::rec_union_case
-              < "cons"
-              , json::typed::field<"x", long>
-              , json::typed::rec_field<"xs", "obj">
-              >
-            >
-          >
-        >::lookup<"obj">
-      >
-      ( json::object
-        { std::pair{"tag", "cons"}
-        , std::pair{"x", 3}
-        , std::pair
-          { "xs"
-          , json::object
-            { std::pair{"tag", "cons"}
-            , std::pair{"x", 1}
-            , std::pair
-              { "xs"
-              , json::object
-                { std::pair{"tag", "cons"}
-                , std::pair{"x", 4}
-                , std::pair
-                  { "xs"
-                  , json::object
-                    { std::pair{"tag", "cons"}
-                    , std::pair{"x", 1}
-                    , std::pair
-                      { "xs"
-                      , json::object
-                        { std::pair{"tag", "cons"}
-                        , std::pair{"x", 5}
-                        , std::pair
-                          { "xs"
-                          , json::object{std::pair{"tag", "nil"}}
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      );
+  auto typed_rec = make_list();
+  print_list(typed_rec);
+  std::cout << '\n';
 
   namespace vldtr = json::validator;
   auto validator = vldtr::any_validator{vldtr::object<vldtr::field<"x", vldtr::any>>{}};
