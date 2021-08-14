@@ -35,8 +35,9 @@ class unique_ptr_constexpr {
     constexpr auto get()       -> T       * { return data; }
     constexpr auto get() const -> T const * { return data; }
 
-    constexpr auto operator*()       -> T       & { return *data; }
-    constexpr auto operator*() const -> T const & { return *data; }
+    constexpr auto operator*()       &  -> T       &  { return *data; }
+    constexpr auto operator*() const &  -> T const &  { return *data; }
+    constexpr auto operator*()       && -> T       && { return std::move(*data); }
 
     constexpr auto operator->()       -> T       * { return data; }
     constexpr auto operator->() const -> T const * { return data; }

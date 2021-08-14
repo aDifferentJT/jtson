@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "string_constexpr.hpp"
 #include "trie.hpp"
 #include "unique_ptr_constexpr.hpp"
 #include "unique_ptr_soo.hpp"
@@ -26,26 +27,58 @@
 using namespace std::literals;
 
 namespace {
-  template <auto> struct lift_to_type {};
+  template <auto x> constexpr auto always = x;
 
-  template <typename T> struct proxy {
-    using type = T;
-  };
+  template <auto...> struct lift_to_type {};
+
+  template <typename> struct proxy {};
 
   template<std::size_t N>
   struct string_literal {
+    static constexpr auto size = N - 1;
+
     char value[N];
 
-    constexpr string_literal(char const (&str)[N]) {
-      std::copy_n(str, N, value);
-    }
+    constexpr string_literal(char const (&str)[N]) { std::copy_n(str, N, value); }
 
     constexpr auto operator[](std::size_t i) const { return value[i]; }
 
-    constexpr operator std::string_view() const {
-      return std::string_view{value, N - 1};
+    template <std::size_t pos = 0, std::size_t count = std::numeric_limits<std::size_t>::max()>
+    constexpr auto substr() const {
+      constexpr auto _count = std::min(count, size - pos);
+      char res[_count + 1];
+      std::copy_n(value + pos, _count, res);
+      res[_count] = '\0';
+      return string_literal<_count + 1>{res};
     }
+
+    constexpr auto empty() const { return size == 0; }
+
+    constexpr auto begin()       -> char       * { return value; }
+    constexpr auto begin() const -> char const * { return value; }
+    constexpr auto end()       -> char       * { return value + size; }
+    constexpr auto end() const -> char const * { return value + size; }
+
+    constexpr auto view() const { return std::string_view{value, size}; }
+    constexpr operator std::string_view() const { return view(); }
+
+    constexpr auto find(std::string_view str) const { return view().find(str); }
+    constexpr auto find(char ch) const { return view().find(ch); }
+    constexpr auto starts_with(std::string_view prefix) const { return view().starts_with(prefix); }
+    constexpr auto starts_with(char ch) const { return view().starts_with(ch); }
+
+    constexpr auto find_first_non_whitespace() const { return view().find_first_not_of(" \n"); }
   };
+
+  template <string_literal str>
+  constexpr auto trim_leading() {
+    constexpr auto i = str.find_first_non_whitespace();
+    if constexpr (i == std::string_view::npos) {
+      return string_literal<1>{""};
+    } else {
+      return str.template substr<i>();
+    }
+  }
 
   template <std::size_t, typename T>
   struct indexed_base_class : T {};
@@ -75,38 +108,12 @@ namespace json {
   };
 
   // TODO delegate to std::string once constexpr std::string is available
-  class string {
-    private:
-      static constexpr char empty[] = "";
-      char const * data;
-      std::size_t size;
+  struct string : string_constexpr {
+    using string_constexpr::string_constexpr;
 
-    public:
-      constexpr string() : data{empty}, size{0} {}
-
-      constexpr string(std::string_view sv)
-        : data
-          { [&] {
-              auto new_data = new char[sv.size() + 1];
-              auto it = std::copy_n(sv.data(), sv.size(), new_data);
-              *it = '\0';
-              return new_data;
-            }()
-          }
-        , size{sv.size()}
-        {}
-
-      constexpr string(string const & that) : string{that.operator std::string_view()} {}
-
-      constexpr ~string() { if (data != empty) { delete[] data; } }
-
-      constexpr auto c_str() const -> char const * { return data; }
-
-      constexpr operator std::string_view() const { return {data, size}; }
-
-      friend auto operator<<(std::ostream& os, string const & str) -> std::ostream& {
-        return os << '"' << str.operator std::string_view() << '"';
-      }
+    friend auto operator<<(std::ostream& os, string const & str) -> std::ostream& {
+      return os << '"' << static_cast<string_constexpr const &>(str) << '"';
+    }
   };
 
   namespace literals {
@@ -114,14 +121,7 @@ namespace json {
       return string{{str, len}};
     }
   }
-}
 
-namespace std {
-  template<>
-  struct hash<json::string> : hash<std::string> {};
-}
-
-namespace json {
   namespace impl {
     struct _unique_ptr_constexpr {
       template <typename T>
@@ -239,8 +239,24 @@ namespace json {
           }
         }
 
+        constexpr auto as_float() const -> double const * {
+          if (auto x = datum.template get_if<ptr_t<double>>()) {
+            return &**x;
+          } else {
+            return nullptr;
+          }
+        }
+
         constexpr auto as_string() const -> string const * {
           if (auto x = datum.template get_if<ptr_t<string>>()) {
+            return &**x;
+          } else {
+            return nullptr;
+          }
+        }
+
+        constexpr auto as_bool() const -> bool const * {
+          if (auto x = datum.template get_if<ptr_t<bool>>()) {
             return &**x;
           } else {
             return nullptr;
@@ -417,145 +433,222 @@ namespace json {
           case ' ':
           case '\n':
             str = str.substr(1);
-          default: return;
+            break;
+          default:
+            return;
         }
       }
     }
 
     constexpr auto parse(std::string_view& str) -> json::value {
-      while (true) {
-        if (str.empty()) {
-          throw parse_error{"Empty string", str};
-        }
-        eat_whitespace(str);
-        switch (str[0]) {
-          case 'n':
-            if (str[1] == 'u' && str[2] == 'l' && str[3] == 'l') {
-              str = str.substr(4);
-              return null{};
-            } else {
-              throw parse_error{"Saw 'n', expected \"null\"", str};
-            }
-          case '+':
-          case '-':
-          case '0':
-          case '1':
-          case '2':
-          case '3':
-          case '4':
-          case '5':
-          case '6':
-          case '7':
-          case '8':
-          case '9':
-            throw parse_error{"Unimplemented parsing numbers", str}; // TODO
-          case '"':
-            {
-              str = str.substr(1);
-              auto i = str.find('"');
-              auto str2 = str.substr(0, i);
-              str = str.substr(i + 1);
-              return string{str2};
-            }
-          case 'f':
-            if (str[1] == 'a' && str[2] == 'l' && str[3] == 's' && str[4] == 'e') {
-              str = str.substr(5);
-              return false;
-            } else {
-              throw parse_error{"Saw 'f', expected \"false\"", str};
-            }
-          case 't':
-            if (str[1] == 'r' && str[2] == 'u' && str[3] == 'e') {
-              str = str.substr(4);
-              return true;
-            } else {
-              throw parse_error{"Saw 't', expected \"true\"", str};
-            }
-          case '[':
-            {
-              str = str.substr(1);
-              auto arr = array{};
-              while (true) {
-                eat_whitespace(str);
-                if (str[0] == ']') {
+      if (str.empty()) {
+        throw parse_error{"Empty string", str};
+      }
+      eat_whitespace(str);
+      switch (str[0]) {
+        case 'n':
+          if (str[1] == 'u' && str[2] == 'l' && str[3] == 'l') {
+            str = str.substr(4);
+            return null{};
+          } else {
+            throw parse_error{"Saw 'n', expected \"null\"", str};
+          }
+        case '+':
+        case '-':
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          throw parse_error{"Unimplemented parsing numbers", str}; // TODO
+        case '"':
+          {
+            str = str.substr(1);
+            auto i = str.find('"');
+            auto str2 = str.substr(0, i);
+            str = str.substr(i + 1);
+            return string{str2};
+          }
+        case 'f':
+          if (str[1] == 'a' && str[2] == 'l' && str[3] == 's' && str[4] == 'e') {
+            str = str.substr(5);
+            return false;
+          } else {
+            throw parse_error{"Saw 'f', expected \"false\"", str};
+          }
+        case 't':
+          if (str[1] == 'r' && str[2] == 'u' && str[3] == 'e') {
+            str = str.substr(4);
+            return true;
+          } else {
+            throw parse_error{"Saw 't', expected \"true\"", str};
+          }
+        case '[':
+          {
+            str = str.substr(1);
+            auto arr = array{};
+            while (true) {
+              eat_whitespace(str);
+              if (str[0] == ']') {
+                str = str.substr(1);
+                return arr;
+              }
+              arr.push_back(parse(str));
+              eat_whitespace(str);
+              switch (str[0]) {
+                case ',':
+                  str = str.substr(1);
+                  break;
+                case ']':
                   str = str.substr(1);
                   return arr;
-                }
-                arr.push_back(parse(str));
-                eat_whitespace(str);
-                switch (str[0]) {
-                  case ',':
-                    str = str.substr(1);
-                    break;
-                  case ']':
-                    str = str.substr(1);
-                    return arr;
-                  default:
-                    throw parse_error{"Expected ',' or ']'", str};
-                }
+                default:
+                  throw parse_error{"Expected ',' or ']'", str};
               }
             }
-          case '{':
-            {
+          }
+        case '{':
+          {
+            str = str.substr(1);
+            auto obj = object{};
+            while (true) {
+              eat_whitespace(str);
+              if (str[0] == '}') {
+                str = str.substr(1);
+                return obj;
+              }
+              auto field = [&] {
+                if (str[0] == '"') {
+                  str = str.substr(1);
+                  auto i = str.find('"');
+                  auto field = str.substr(0, i);
+                  str = str.substr(i + 1);
+                  return field;
+                } else if (is_initial_ident_char(str[0])) {
+                  auto field = str;
+                  str = str.substr(1);
+                  auto field_end = std::find_if_not(str.begin(), str.end(), is_ident_char);
+                  field = field.substr(0, field_end - field.begin());
+                  str = str.substr(field_end - str.begin());
+                  return field;
+                } else {
+                  throw parse_error{"Expected a field name", str};
+                }
+              }();
+              eat_whitespace(str);
+              if (str[0] != ':') {
+                throw parse_error{"Expected ':'", str};
+              }
               str = str.substr(1);
-              auto obj = object{};
-              while (true) {
-                eat_whitespace(str);
-                if (str[0] == '}') {
+              obj.emplace(field, parse(str));
+              eat_whitespace(str);
+              switch (str[0]) {
+                case ',':
+                  str = str.substr(1);
+                  break;
+                case '}':
                   str = str.substr(1);
                   return obj;
-                }
-                auto field = [&] {
-                  if (str[0] == '"') {
-                    str = str.substr(1);
-                    auto i = str.find('"');
-                    auto field = str.substr(0, i);
-                    str = str.substr(i + 1);
-                    return field;
-                  } else if (is_initial_ident_char(str[0])) {
-                    auto field = str;
-                    str = str.substr(1);
-                    auto field_end = std::find_if_not(str.begin(), str.end(), is_ident_char);
-                    field = field.substr(0, field_end - field.begin());
-                    str = str.substr(field_end - str.begin());
-                    return field;
-                  } else {
-                    throw parse_error{"Expected a field name", str};
-                  }
-                }();
-                eat_whitespace(str);
-                if (str[0] != ':') {
-                  throw parse_error{"Expected ':'", str};
-                }
-                str = str.substr(1);
-                obj.emplace(field, parse(str));
-                eat_whitespace(str);
-                switch (str[0]) {
-                  case ',':
-                    str = str.substr(1);
-                    break;
-                  case '}':
-                    str = str.substr(1);
-                    return obj;
-                  default:
-                    throw parse_error{"Expected ',' or '}'", str};
-                }
+                default:
+                  throw parse_error{"Expected ',' or '}'", str};
               }
             }
-          default:
-            throw parse_error{"Unexpected character", str};
-        }
+          }
+        default:
+          throw parse_error{"Unexpected character", str};
       }
     }
   }
 
   constexpr auto parse(std::string_view str) -> json::value {
     auto res = impl::parse(str);
+    impl::eat_whitespace(str);
     if (!str.empty()) {
       throw parse_error{"Finished parsing but haven't reached the end of the string", str};
     }
     return res;
   }
+
+  namespace literals {
+    constexpr auto operator""_json(char const * str, std::size_t len) {
+      return parse({str, len});
+    }
+  }
+
+  struct schema {
+    struct rec { string_constexpr ident; };
+
+    struct any {};
+    struct null {};
+    struct _int {};
+    struct _float {};
+    struct string {};
+    struct _bool {};
+
+    struct array {
+      unique_ptr_constexpr<schema> elements;
+
+      friend constexpr void swap(array& lhs, array& rhs) {
+        std::swap(lhs.elements, rhs.elements);
+      }
+
+      constexpr array(auto&& ...args) : elements{make_unique_constexpr<schema>(std::forward<decltype(args)>(args)...)} {}
+
+      constexpr array(array const & that) : elements{make_unique_constexpr<schema>(*that.elements)} {}
+
+      constexpr array& operator=(array const & that) {
+        auto tmp = that;
+        swap(*this, tmp);
+        return *this;
+      }
+
+      constexpr array(array&&) = default;
+      constexpr array& operator=(array&&) = default;
+    };
+
+    struct dict {
+      unique_ptr_constexpr<schema> elements;
+
+      friend constexpr void swap(dict& lhs, dict& rhs) {
+        std::swap(lhs.elements, rhs.elements);
+      }
+
+      constexpr dict(auto&& ...args) : elements{make_unique_constexpr<schema>(std::forward<decltype(args)>(args)...)} {}
+
+      constexpr dict(dict const & that) : elements{make_unique_constexpr<schema>(*that.elements)} {}
+
+      constexpr dict& operator=(dict const & that) {
+        auto tmp = that;
+        swap(*this, tmp);
+        return *this;
+      }
+
+      constexpr dict(dict&&) = default;
+      constexpr dict& operator=(dict&&) = default;
+    };
+
+    struct object : trie<schema> { using trie<schema>::trie; };
+    struct discriminated_union { string_constexpr discriminator; trie<object> cases; };
+
+    using variant_type = variant_constexpr
+      <any, null, _int, _float, string, _bool, array, dict, object, discriminated_union>;
+
+    variant_type data;
+
+    constexpr schema(schema&) = default;
+    constexpr schema& operator=(schema&) = default;
+    constexpr schema(schema const &) = default;
+    constexpr schema& operator=(schema const &) = default;
+    constexpr schema(schema&&) = default;
+    constexpr schema& operator=(schema&&) = default;
+
+    constexpr schema(auto&& ...args) : data{std::forward<decltype(args)>(args)...} {}
+  };
 
   namespace typed {
     struct parsed_wrong_type : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -565,6 +658,10 @@ namespace json {
 
     template <typename T> constexpr auto parse(json::value_const_view val) { return parse_t<T>{}(val); }
 
+    template <typename>
+    struct to_schema_t;
+
+    template <typename T> constexpr auto to_schema() -> schema { return to_schema_t<T>::_schema(); }
     
     template <string_literal Ident, typename T>
     struct decl {
@@ -599,9 +696,60 @@ namespace json {
       template <is_decl ...Decls> constexpr auto _is_context<context<Decls...>> = true;
     }
 
+    template <impl::is_context Context, string_literal Ident>
+    class lazy {
+      private:
+        using type = Context::template lookup<Ident>;
+
+        unique_ptr_constexpr<type> datum;
+
+        constexpr lazy(unique_ptr_constexpr<type> datum) : datum{std::move(datum)} {}
+
+      public:
+        constexpr operator type       &  ()       &  { return *datum; }
+        constexpr operator type const &  () const &  { return *datum; }
+        constexpr operator type       && ()       && { return *std::move(datum); }
+
+        constexpr auto operator*()       &  -> type       &  { return *datum; }
+        constexpr auto operator*() const &  -> type const &  { return *datum; }
+        constexpr auto operator*()       && -> type       && { return *std::move(datum); }
+    
+        constexpr auto operator->()       -> auto       & { return datum; }
+        constexpr auto operator->() const -> auto const & { return datum; }
+
+        friend struct parse_t<lazy<Context, Ident>>;
+        friend struct to_schema_t<lazy<Context, Ident>>;
+    };
+
+    template <impl::is_context Context, string_literal Ident>
+    struct parse_t<lazy<Context, Ident>> {
+      constexpr auto operator()(json::value_const_view val) const -> lazy<Context, Ident> {
+        using type = lazy<Context, Ident>::type;
+        return make_unique_constexpr<type>(parse<type>(val));
+      }
+    };
+
+    template <impl::is_context Context, string_literal Ident>
+    constexpr auto untyped(lazy<Context, Ident> const & val) -> json::value_const_view { return untyped(*val); }
+    template <impl::is_context Context, string_literal Ident>
+    constexpr auto untyped(lazy<Context, Ident> &&      val) -> json::value { return untyped(*std::move(val)); }
+
+    template <impl::is_context Context, string_literal Ident>
+    struct to_schema_t<lazy<Context, Ident>> {
+      static constexpr auto _schema() { return to_schema<typename lazy<Context, Ident>::type>(); }
+    };
+
+    template <string_literal Ident>
+    struct rec;
+
+    template <string_literal Ident>
+    struct in_context_t<rec<Ident>> {
+      template <impl::is_context Context> using type = lazy<Context, Ident>;
+    };
+
     template <>
     struct parse_t<json::value> {
-      constexpr auto operator()(json::value_const_view val) -> json::value {
+      constexpr auto operator()(json::value_const_view val) const -> json::value {
         return val;
       }
     };
@@ -609,14 +757,33 @@ namespace json {
     constexpr auto untyped(json::value const & val) -> json::value const & { return val; }
     constexpr auto untyped(json::value &&      val) -> json::value &&      { return std::move(val); }
 
+    template <> struct to_schema_t<json::value> { static constexpr auto _schema() { return schema::any{}; } };
+
+    template <> struct in_context_t<json::value> { template <impl::is_context> using type = json::value; };
+
     template <>
-    struct in_context_t<json::value> {
-      template <impl::is_context> using type = json::value;
+    struct parse_t<json::null> {
+      constexpr auto operator()(json::value_const_view val) const -> json::null {
+        if (val.is_null()) {
+          return {};
+        } else {
+          throw parsed_wrong_type{"Expected a null, got "s + std::string{val.debug_type()}};
+        }
+      }
+    };
+
+    constexpr auto untyped(json::null val) -> json::null { return val; }
+
+    template <> struct to_schema_t<json::null> { static constexpr auto _schema() { return schema::null{}; } };
+
+    template <>
+    struct in_context_t<json::null> {
+      template <impl::is_context> using type = json::null;
     };
 
     template <>
     struct parse_t<long> {
-      constexpr auto operator()(json::value_const_view val) -> long {
+      constexpr auto operator()(json::value_const_view val) const -> long {
         if (auto x = val.as_int()) {
           return *x;
         } else {
@@ -627,14 +794,33 @@ namespace json {
 
     constexpr auto untyped(long x) { return x; }
 
+    template <> struct to_schema_t<long> { static constexpr auto _schema() { return schema::_int{}; } };
+
+    template <> struct in_context_t<long> { template <impl::is_context> using type = long; };
+
     template <>
-    struct in_context_t<long> {
-      template <impl::is_context> using type = long;
+    struct parse_t<double> {
+      constexpr auto operator()(json::value_const_view val) const -> double {
+        if (auto x = val.as_float()) {
+          return *x;
+        } else {
+          throw parsed_wrong_type{"Expected a float, got "s + std::string{val.debug_type()}};
+        }
+      }
+    };
+
+    constexpr auto untyped(double x) { return x; }
+
+    template <> struct to_schema_t<double> { static constexpr auto _schema() { return schema::_float{}; } };
+
+    template <>
+    struct in_context_t<double> {
+      template <impl::is_context> using type = double;
     };
 
     template <>
-    struct parse_t<json::string> {
-      constexpr auto operator()(json::value_const_view val) -> json::string {
+    struct parse_t<string_constexpr> {
+      constexpr auto operator()(json::value_const_view val) const -> string_constexpr {
         if (auto str = val.as_string()) {
           return *str;
         } else {
@@ -643,17 +829,36 @@ namespace json {
       }
     };
 
-    constexpr auto untyped(json::string const & str) -> json::string const & { return str; }
-    constexpr auto untyped(json::string&& str) -> json::string&& { return std::move(str); }
+    constexpr auto untyped(string_constexpr const & str) -> string_constexpr const & { return str; }
+    constexpr auto untyped(string_constexpr&& str) -> string_constexpr&& { return std::move(str); }
+
+    template <> struct to_schema_t<string_constexpr> { static constexpr auto _schema() { return schema::string{}; } };
+
+    template <> struct in_context_t<string_constexpr> { template <impl::is_context> using type = string_constexpr; };
 
     template <>
-    struct in_context_t<json::string> {
-      template <impl::is_context> using type = json::string;
+    struct parse_t<bool> {
+      constexpr auto operator()(json::value_const_view val) const -> bool {
+        if (auto x = val.as_bool()) {
+          return *x;
+        } else {
+          throw parsed_wrong_type{"Expected a bool, got "s + std::string{val.debug_type()}};
+        }
+      }
+    };
+
+    constexpr auto untyped(bool x) { return x; }
+
+    template <> struct to_schema_t<bool> { static constexpr auto _schema() { return schema::_bool{}; } };
+
+    template <>
+    struct in_context_t<bool> {
+      template <impl::is_context> using type = bool;
     };
 
     template <typename T>
     struct parse_t<vector_constexpr<T>> {
-      constexpr auto operator()(json::value_const_view val) -> vector_constexpr<T> {
+      constexpr auto operator()(json::value_const_view val) const -> vector_constexpr<T> {
         if (auto xs = val.as_array()) {
           auto ys = vector_constexpr<T>(xs->size());
           std::transform(xs->begin(), xs->end(), std::back_insert_iterator{ys}, parse_t<T>{});
@@ -666,6 +871,8 @@ namespace json {
 
     constexpr auto untyped(vector_constexpr<auto> x) -> json::array { throw 0;/* TODO */ }
 
+    template <typename T> struct to_schema_t<vector_constexpr<T>> { static constexpr auto _schema() { return schema::array{to_schema<T>()}; } };
+
     template <typename T>
     struct in_context_t<vector_constexpr<T>> {
       template <impl::is_context Context> using type = vector_constexpr<in_context<Context, T>>;
@@ -673,9 +880,9 @@ namespace json {
 
     template <typename T>
     struct parse_t<trie<T>> {
-      constexpr auto operator()(json::value_const_view val) -> trie<T> {
+      constexpr auto operator()(json::value_const_view val) const -> trie<T> {
         if (auto xs = val.as_object()) {
-          return *xs;
+          return trie<T>{parse_t<T>{}, *xs};
         } else {
           throw parsed_wrong_type{"Expected an array, got "s + std::string{val.debug_type()}};
         }
@@ -683,6 +890,8 @@ namespace json {
     };
 
     constexpr auto untyped(trie<auto> x) -> json::object { return x; }
+
+    template <typename T> struct to_schema_t<trie<T>> { static constexpr auto _schema() { return schema::dict{to_schema<T>()}; } };
 
     template <typename T>
     struct in_context_t<trie<T>> {
@@ -696,6 +905,7 @@ namespace json {
 
       public:
         static constexpr auto name = Name;
+        using type = T;
   
         constexpr field(auto&& ...args) : datum{std::forward<decltype(args)>(args)...} {}
   
@@ -725,45 +935,12 @@ namespace json {
       template <impl::is_context Context> using type = field<Name, in_context<Context, T>>;
     };
 
-    template <string_literal Name, impl::is_context Context, string_literal Ident>
-    struct lazy_field {
-      private:
-        using type = Context::template lookup<Ident>;
-
-        unique_ptr_constexpr<type> datum;
-
-      public:
-        static constexpr auto name = Name;
-
-        constexpr lazy_field(auto&& ...args) : datum{new type{std::forward<decltype(args)>(args)...}} {}
-  
-        constexpr lazy_field(json::object const & obj)
-          : datum
-            { [&] {
-                if (auto x = obj.get_if(Name)) {
-                  try {
-                    return make_unique_constexpr<type>(parse<type>(*x));
-                  } catch (parsed_wrong_type const & e) {
-                    throw parsed_wrong_type{"When parsing field: "s + std::string{Name} + "\n"s + e.what()};
-                  }
-                } else {
-                  throw parsed_wrong_type{"Expected field: "s + std::string{Name}};
-                }
-              }()
-            }
-          {}
-
-        constexpr auto get_field(lift_to_type<Name>) &       -> auto &       { return *datum; }
-        constexpr auto get_field(lift_to_type<Name>) const & -> auto const & { return *datum; }
-        constexpr auto get_field(lift_to_type<Name>) &&      -> auto &&      { return *datum; }
-    };
-
-    template <string_literal Name, string_literal Ident>
+    template <string_literal Name, typename T>
     struct rec_field;
 
-    template <string_literal Name, string_literal Ident>
-    struct in_context_t<rec_field<Name, Ident>> {
-      template <impl::is_context Context> using type = lazy_field<Name, Context, Ident>;
+    template <string_literal Name, typename T>
+    struct in_context_t<rec_field<Name, T>> {
+      template <impl::is_context Context> using type = field<Name, in_context<Context, T>>;
     };
 
     namespace impl {
@@ -772,9 +949,6 @@ namespace json {
 
       template <string_literal Name, typename T>
       constexpr auto _is_field<field<Name, T>> = true;
-
-      template <string_literal Name, impl::is_context Context, string_literal Ident>
-      constexpr auto _is_field<lazy_field<Name, Context, Ident>> = true;
 
       template <typename Field> concept is_field = _is_field<Field>;
     }
@@ -809,24 +983,35 @@ namespace json {
         constexpr object(object<Fields2...> && that) : Fields{std::move(that).template get<Fields::tag>()}... {}
 
         constexpr object(json::object const & obj) : Fields{obj}... {}
-  
-        friend constexpr auto untyped(object const & obj) {
-          return json::object{std::pair{Fields::tag, obj.get<Fields::tag>().untyped()}...};
-        }
-        
-        friend constexpr auto untyped(object && obj) {
-          return json::object{std::pair{Fields::tag, std::move(obj).template get<Fields::tag>().untyped()}...};
-        }
     };
 
     template <impl::is_field ...Fields>
     struct parse_t<object<Fields...>> {
-      constexpr auto operator()(json::value_const_view val) -> object<Fields...> {
+      constexpr auto operator()(json::value_const_view val) const -> object<Fields...> {
         if (auto obj = val.as_object()) {
           return object<Fields...>{*obj};
         } else {
           throw parsed_wrong_type{"Expected an object"};
         }
+      }
+    };
+  
+    template <impl::is_field ...Fields>
+    constexpr auto untyped(object<Fields...> const & obj) {
+      throw 0; // TODO
+      //return json::object{std::pair{Fields::tag, obj.get<Fields::tag>().untyped()}...};
+    }
+        
+    template <impl::is_field ...Fields>
+    constexpr auto untyped(object<Fields...> && obj) {
+      throw 0; // TODO
+      //return json::object{std::pair{Fields::tag, std::move(obj).template get<Fields::tag>().untyped()}...};
+    }
+
+    template <impl::is_field ...Fields>
+    struct to_schema_t<object<Fields...>> {
+      static constexpr auto _schema() {
+        return schema::object{std::pair{Fields::name.view(), schema{to_schema<typename Fields::type>()}}...};
       }
     };
 
@@ -1074,7 +1259,7 @@ namespace json {
         };
 
       public:
-        constexpr auto operator()(json::value_const_view val) -> discriminated_union<Discriminator, Cases...> {
+        constexpr auto operator()(json::value_const_view val) const -> discriminated_union<Discriminator, Cases...> {
           if (auto obj = val.as_object()) {
             if (auto tag_val = obj->get_if(Discriminator)) {
               if (auto tag = tag_val->as_string()) {
@@ -1092,6 +1277,22 @@ namespace json {
     };
 
     template <string_literal Discriminator, impl::is_case ...Cases>
+    struct to_schema_t<discriminated_union<Discriminator, Cases...>> {
+      static constexpr auto _schema() {
+        return schema::discriminated_union
+          { Discriminator.view()
+          , { [] <string_literal Tag, impl::is_field ...Fields> (proxy<union_case<Tag, Fields...>>) {
+                return std::pair
+                  { Tag
+                  , to_schema_t<object<Fields...>>::_schema()
+                  };
+              }(proxy<Cases>{})...
+            }
+          };
+      }
+    };
+
+    template <string_literal Discriminator, impl::is_case ...Cases>
     struct in_context_t<discriminated_union<Discriminator, Cases...>> {
       template <impl::is_context Context> using type = discriminated_union<Discriminator, in_context<Context, Cases>...>;
     };
@@ -1103,198 +1304,207 @@ namespace json {
     struct in_context_t<rec_discriminated_union<Discriminator, Cases...>> {
       template <impl::is_context Context> using type = discriminated_union<Discriminator, in_context<Context, Cases>...>;
     };
-  }
-
-  namespace validator {
-    template <typename T>
-    concept validator = requires(T vldtr, value_const_view val) {
-      { vldtr(val) } -> std::same_as<bool>;
-    };
-
-    class any_validator {
-      private:
-        unique_ptr_soo<sizeof(void*), void> datum;
-        auto (*call)(void const * _this, value_const_view val) -> bool;
-
-      public:
-        any_validator(any_validator&) = default;
-        any_validator(any_validator const &) = default;
-        any_validator(any_validator&&) = default;
-
-        any_validator(validator auto&& x)
-          : datum{std::forward<decltype(x)>(x)}
-          , call
-            { [](void const * _this, value_const_view val) -> bool {
-                return (*static_cast<std::decay_t<decltype(x)> const *>(_this))(val);
-              }
-            }
-          {}
-
-        auto operator()(value_const_view val) const -> bool {
-          return call(datum.get(), val);
-        }
-    };
-
-    struct any {
-      auto operator()(value_const_view) const -> bool {
-        return true;
-      }
-    };
-
-    template <typename Child>
-    struct _not : private Child {
-      using Child::Child;
-
-      auto operator()(value_const_view val) const -> bool {
-        return !static_cast<Child const &>(*this)(val);
-      }
-    };
 
     namespace impl {
-      template <typename, validator ...Clauses>
-      struct and_indexed;
-
-      template <std::size_t ...Is, validator ...Clauses>
-      struct and_indexed<std::index_sequence<Is...>, Clauses...>
-        : private indexed_base_class<Is, Clauses>...
-      {
-        and_indexed() = default;
-        and_indexed(Clauses ...clauses) : indexed_base_class<Is, Clauses>{std::move(clauses)}... {}
-
-        auto operator()(value_const_view val) const -> bool {
-          return (static_cast<indexed_base_class<Is, Clauses> const &>(*this)(val) && ...);
+      template <auto const & start_it, auto const & end_it, auto const & ...existing>
+      constexpr auto expand_iterators() {
+        if constexpr (start_it == end_it) {
+          return lift_to_type<&existing...>{};
+        } else {
+          auto next_it = start_it;
+          ++next_it;
+          return expand_iterators<next_it, end_it, existing..., *start_it>();
         }
       };
 
-      template <typename, validator ...Clauses>
-      struct or_indexed;
-
-      template <std::size_t ...Is, validator ...Clauses>
-      struct or_indexed<std::index_sequence<Is...>, Clauses...>
-        : private indexed_base_class<Is, Clauses>...
-      {
-        or_indexed() = default;
-        or_indexed(Clauses ...clauses) : indexed_base_class<Is, Clauses>{std::move(clauses)}... {}
-
-        auto operator()(value_const_view val) const -> bool {
-          return (static_cast<indexed_base_class<Is, Clauses> const &>(*this)(val) || ...);
-        }
+      template <typename Type, string_literal Rest>
+      struct parse_result {
+        using type = Type;
+        static constexpr auto rest = Rest;
       };
-    }
 
-    template <validator ...Clauses>
-    using _and = impl::and_indexed<std::index_sequence_for<Clauses...>, Clauses...>;
-
-    template <validator ...Clauses>
-    using _or = impl::or_indexed<std::index_sequence_for<Clauses...>, Clauses...>;
-
-    namespace impl {
-      template <auto (value_const_view::*member)() const -> bool>
-      struct primitive {
-        auto operator()(value_const_view val) const -> bool {
-          return (val.*member)();
-        }
+      template <auto Value, string_literal Rest>
+      struct parse_non_type_result {
+        static constexpr auto value = Value;
+        static constexpr auto rest = Rest;
       };
-    }
 
-    struct null   : impl::primitive<&value_const_view::is_null> {};
-    struct number : impl::primitive<&value_const_view::is_number> {};
-    struct string : impl::primitive<&value_const_view::is_string> {};
+      template <string_literal Rest, typename ...>
+      struct parse_fields_result {
+        static constexpr auto rest = Rest;
+      };
 
-    template <validator Element>
-    struct array : private Element {
-      using Element::Element;
-
-      auto operator()(value_const_view val) const -> bool {
-        if (auto arr = val.as_array()) {
-          for (auto const & x : *arr) {
-            if (!static_cast<Element const &>(*this)(x)) {
-              return false;
-            }
-          }
-          return true;
+      template <string_literal Schema, string_literal Token>
+      constexpr auto parse_token() {
+        constexpr auto schema = trim_leading<Schema>();
+        if constexpr (schema.starts_with(Token)) {
+          return schema.template substr<Token.size>();
         } else {
-          return false;
-        }
-      }
-    };
-
-    template <string_literal Name, validator Contents>
-    struct field {
-      static constexpr auto name = Name;
-      using contents = Contents;
-    };
-
-    namespace impl {
-      template <typename> constexpr auto _is_field = false;
-      template <string_literal Name, typename Contents> constexpr auto _is_field<field<Name, Contents>> = true;
-
-      template <typename Field> concept is_field = _is_field<Field>;
-    }
-
-    template <impl::is_field Field>
-    struct contains_field : private Field::contents {
-      using Field::contents::contents;
-
-      auto operator()(json::object const & obj) const -> bool {
-        if (auto x = obj.get_if(Field::name)) {
-          return static_cast<Field::contents const &>(*this)(*x);
-        } else {
-          return false;
+          static_assert(always<false>, "Parse error");
         }
       }
 
-      auto operator()(value_const_view val) const -> bool {
-        if (auto obj = val.as_object()) {
-          return (*this)(*obj);
+      template <string_literal Schema>
+      constexpr auto parse_ident() {
+        constexpr auto schema = trim_leading<Schema>();
+        if constexpr (json::impl::is_initial_ident_char(schema[0])) {
+          constexpr auto ident_begin = Schema.begin() + Schema.find_first_non_whitespace();
+          constexpr auto ident_end = std::find_if_not(ident_begin + 1, Schema.end(), json::impl::is_ident_char);
+          constexpr auto ident = schema.template substr<0, ident_end - ident_begin>();
+          constexpr auto schema1 = schema.template substr<ident_end - ident_begin>();
+          return parse_non_type_result<ident, schema1>{};
         } else {
-          return false;
+          static_assert(always<false>, "Parse error");
         }
       }
-    };
 
-    template <impl::is_field ...Fields>
-    struct object : _and<contains_field<Fields>...> {};
+      template <string_literal Schema>
+      constexpr auto parse_field_name() {
+        constexpr auto schema = trim_leading<Schema>();
+        if constexpr (schema.starts_with('"')) {
+          constexpr auto schema1 = schema.template substr<1>();
+          constexpr auto i = schema1.find('"');
+          constexpr auto field = schema1.template substr<0, i>();
+          constexpr auto schema2 = schema1.template substr<i + 1>();
+          return parse_non_type_result<field, schema2>{};
+        } else {
+          return parse_ident<schema>();
+        }
+      }
 
-    template <string_literal Tag, validator Validator>
-    struct union_case {
-      static constexpr auto tag = Tag;
-      using validator = Validator;
-    };
-
-    namespace impl {
-      template <typename> constexpr auto _is_case = false;
-      template <string_literal Tag, validator Validator> constexpr auto _is_case<union_case<Tag, Validator>> = true;
-
-      template <typename Case> concept is_case = _is_case<Case>;
-    }
-
-    template <string_literal Discriminator, impl::is_case Case>
-    struct inhabits_case : private Case::validator {
-      using Case::validator::validator;
-
-      auto operator()(json::object const & obj) const -> bool {
-        if (auto tagVal = obj.get_if(json::string{Discriminator})) {
-          if (auto tag = tagVal->as_string()) {
-            if (*tag == Case::tag) {
-              return static_cast<Case::validator const &>(*this)(obj);
-            }
+      template <template <bool, string_literal> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
+      constexpr auto parse_fields() {
+        if constexpr (Schema.starts_with('}')) {
+          return parse_fields_result<Schema.template substr<1>(), Accum...>{};
+        } else {
+          using field_name = decltype(parse_field_name<Schema>());
+          constexpr auto schema1 = parse_token<field_name::rest, ":">();
+          using field_type = parse_schema<is_rec, schema1>::parse;
+          using _field = std::conditional_t
+            < is_rec
+            , rec_field<field_name::value, typename field_type::type>
+            , field<field_name::value, typename field_type::type>
+            >;
+          constexpr auto schema2 = trim_leading<field_type::rest>();
+          if constexpr (schema2.starts_with(',')) {
+            return parse_fields<parse_schema, is_rec, schema2.template substr<1>(), Accum..., _field>();
+          } else if constexpr (schema2.starts_with('}')) {
+            return parse_fields_result<schema2.template substr<1>(), Accum..., _field>{};
+          } else {
+            static_assert(always<false>, "Fields parse failed");
           }
         }
-        return false;
       }
 
-      auto operator()(value_const_view val) const -> bool {
-        if (auto obj = val.as_object()) {
-          return (*this)(*obj);
+      template <template <bool, string_literal> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
+      constexpr auto parse_cases() {
+        if constexpr (Schema.starts_with('>')) {
+          return parse_fields_result<Schema.template substr<1>(), Accum...>{};
         } else {
-          return false;
+          using case_name = decltype(parse_field_name<Schema>());
+          constexpr auto schema1 = parse_token<case_name::rest, ":">();
+          constexpr auto schema2 = parse_token<schema1, "{">();
+
+          constexpr auto _case = [] <string_literal Rest, typename ...Fields> (parse_fields_result<Rest, Fields...>) {
+            if constexpr (is_rec) {
+              return parse_result<rec_union_case<case_name::value, Fields...>, Rest>{};
+            } else {
+              return parse_result<union_case<case_name::value, Fields...>, Rest>{};
+            }
+          }(parse_fields<parse_schema, is_rec, schema2>());
+          constexpr auto schema3 = trim_leading<decltype(_case)::rest>();
+          if constexpr (schema3.starts_with(',')) {
+            return parse_cases<parse_schema, is_rec, schema3.template substr<1>(), Accum..., typename decltype(_case)::type>();
+          } else if constexpr (schema3.starts_with('>')) {
+            return parse_fields_result<schema3.template substr<1>(), Accum..., typename decltype(_case)::type>{};
+          } else {
+            static_assert(always<false>, "Cases parse failed");
+          }
         }
       }
-    };
 
-    template <string_literal Discriminator, impl::is_case ...Cases>
-    struct discriminated_union : _or<inhabits_case<Discriminator, Cases>...> {};
+      template <bool is_rec, string_literal Schema, bool force_consume_all = false>
+      class parse_schema {
+        private:
+          static constexpr auto _parse() {
+            constexpr auto schema = trim_leading<Schema>();
+
+            if constexpr (schema.starts_with("rec")) {
+              static_assert(is_rec, "Can only use rec in appropriate context");
+              constexpr auto schema1 = parse_token<schema.template substr<3>(), "<">();
+              using ident = decltype(parse_ident<schema1>());
+              constexpr auto schema2 = parse_token<ident::rest, ">">();
+              return parse_result<rec<ident::value>, schema2>{};
+            } else if constexpr (schema.starts_with("any")) {
+              return parse_result<value, schema.template substr<3>()>{};
+            } else if constexpr (schema.starts_with("null")) {
+              return parse_result<null, schema.template substr<4>()>{};
+            } else if constexpr (schema.starts_with("int")) {
+              return parse_result<long, schema.template substr<3>()>{};
+            } else if constexpr (schema.starts_with("float")) {
+              return parse_result<double, schema.template substr<5>()>{};
+            } else if constexpr (schema.starts_with("string")) {
+              return parse_result<string_constexpr, schema.template substr<6>()>{};
+            } else if constexpr (schema.starts_with("bool")) {
+              return parse_result<bool, schema.template substr<4>()>{};
+            } else if constexpr (schema.starts_with("[")) {
+              using elements = parse_schema<is_rec, schema.template substr<1>()>::parse;
+              constexpr auto schema1 = parse_token<elements::rest, "]">();
+              return parse_result<vector_constexpr<typename elements::type>, schema1>{};
+            } else if constexpr (schema.starts_with("dict")) {
+              constexpr auto schema1 = parse_token<schema.template substr<4>(), "<">();
+              using elements = parse_schema<is_rec, schema1>::parse;
+              constexpr auto schema2 = parse_token<elements::rest, ">">();
+              return parse_result<trie<typename elements::type>, schema2>{};
+            } else if constexpr (schema.starts_with("{")) {
+              return [] <string_literal Rest, typename ...Fields> (parse_fields_result<Rest, Fields...>) {
+                if constexpr (is_rec) {
+                  return parse_result<rec_object<Fields...>, Rest>{};
+                } else {
+                  return parse_result<object<Fields...>, Rest>{};
+                }
+              }(parse_fields<parse_schema, is_rec, schema.template substr<1>()>());
+            } else if constexpr (schema.starts_with("?")) {
+              using discriminator = decltype(parse_field_name<schema.template substr<1>()>());
+              constexpr auto schema1 = parse_token<discriminator::rest, "<">();
+              return [&] <string_literal Rest, typename ...Cases> (parse_fields_result<Rest, Cases...>) {
+                if constexpr (is_rec) {
+                  return parse_result<rec_discriminated_union<discriminator::value, Cases...>, Rest>{};
+                } else {
+                  return parse_result<discriminated_union<discriminator::value, Cases...>, Rest>{};
+                }
+              }(parse_cases<parse_schema, is_rec, schema1>());
+            } else {
+              static_assert(always<false>, "schema parse failed");
+            }
+          }
+  
+        public:
+          using parse = decltype(_parse());
+
+          static_assert(!force_consume_all || trim_leading<parse::rest>().empty(), "Unexpected data after finished parsing");
+      };
+
+      template <string_literal Schema, typename ...Accum>
+      constexpr auto parse_context() {
+        constexpr auto schema = trim_leading<Schema>();
+        if constexpr (schema.empty()) {
+          return context<Accum...>{};
+        } else {
+          using ident = decltype(parse_ident<schema>());
+          constexpr auto schema1 = parse_token<ident::rest, "=">();
+          using type = parse_schema<true, schema1>::parse;
+          using _decl = decl<ident::value, typename type::type>;
+          return parse_context<type::rest, Accum..., _decl>();
+        }
+      }
+    }
+
+    template <string_literal Schema>
+    using parse_schema = impl::parse_schema<false, Schema, true>::parse::type;
+
+    template <string_literal Schema>
+    using parse_context = decltype(impl::parse_context<Schema>());
   }
 }
 

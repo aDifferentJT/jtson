@@ -166,7 +166,7 @@ class variant_constexpr_indexed<std::index_sequence<Is...>, Ts...> : private var
     }
 
     constexpr variant_constexpr_indexed(variant_constexpr_indexed const & that) noexcept((std::is_nothrow_copy_constructible_v<Ts> && ... && true)) : _index{that._index} {
-      that.template visit<void>([this] <typename T> (T const & x) { std::construct_at(data.template get<T>(), x); });
+      that.template visit<void>([this] <typename T> (T const & x) { std::construct_at(&data.template get<T>(), x); });
     }
 
     constexpr variant_constexpr_indexed(variant_constexpr_indexed&& that) noexcept((std::is_nothrow_move_constructible_v<Ts> && ... && true)) : _index{that._index} {

@@ -11,6 +11,9 @@
 template <typename T>
 class trie {
   private:
+    template <typename U>
+    friend class trie;
+
     static constexpr auto factor = static_cast<std::size_t>(std::numeric_limits<unsigned char>::max()) + 1;
 
     // TODO could be std::optional once constexpr optional is available (DR to 20)
@@ -32,7 +35,7 @@ class trie {
     constexpr trie& operator=(trie const &) = delete; // TODO
 
     // TODO compiler bug?
-    constexpr trie(trie&& that)
+    constexpr trie(trie&& that) noexcept
       : here{std::move(that.here)}
       , nexts
         { [&] <std::size_t ...Is> (std::index_sequence<Is...>) {
@@ -42,6 +45,23 @@ class trie {
       {}
 
     constexpr trie& operator=(trie&&) = default;
+
+    template <typename U>
+    constexpr trie(auto const & f, trie<U> const & that)
+      : here{make_unique_constexpr<T>(f(*that.here))}
+      , nexts
+        { [&] <std::size_t ...Is> (std::index_sequence<Is...>) {
+            auto map = [&](unique_ptr_constexpr<trie<U>> const & x) -> unique_ptr_constexpr<trie<T>> {
+              if (x) {
+                return make_unique_constexpr<trie>(f, *x);
+              } else {
+                return nullptr;
+              }
+            };
+            return std::array{map(std::get<Is>(that.nexts))...};
+          }(std::make_index_sequence<factor>{})
+        }
+      {}
 
     class const_it {
       private:
@@ -122,7 +142,7 @@ class trie {
 
     constexpr trie(std::initializer_list<std::pair<std::string_view, T>> xs) {
       for (auto& [key, val] : xs) {
-        emplace(std::move(key), std::move(val));
+        emplace(key, val);
       }
     }
 

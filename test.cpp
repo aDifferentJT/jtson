@@ -11,7 +11,7 @@ using list =
       , json::typed::rec_union_case
         < "cons"
         , json::typed::field<"x", long>
-        , json::typed::rec_field<"xs", "obj">
+        , json::typed::rec_field<"xs", json::typed::rec<"obj">>
         >
       >
     >
@@ -70,8 +70,50 @@ void print_list(list const & xs) {
     );
 }
 
+using provider_type = json::typed::parse_context
+  < R"(
+provider =
+  { id: string
+  , type: string
+  , config:
+    ? tag
+    < raw: {raw: any}
+    , provider: {provider: rec<provider>}
+    >
+  , children:
+    [ { provider: rec<provider>
+      , downstream: dict<string>
+      }
+    ]
+  }
+    )"
+  >::lookup<"provider">;
+
 constexpr auto test() {
   using namespace json::literals;
+
+  auto provider_untyped = R"(
+{ id: ""
+, type: ""
+, config:
+  { tag: "provider"
+  , provider:
+    { id: ""
+    , type: ""
+    , config:
+      { tag: "raw"
+      , raw: null
+      }
+    , children: []
+    }
+  }
+, children: []
+}
+    )"_json;
+
+  auto provider_typed = json::typed::parse<provider_type>(provider_untyped);
+
+  [[maybe_unused]] auto provider_schema = json::typed::to_schema<provider_type>;
 
   auto obj2 = json::parse("[null, \"foo\", false, true, {foo:true, \"bar 2\":false}]");
 
@@ -162,11 +204,5 @@ int main() {
   auto typed_rec = make_list();
   print_list(typed_rec);
   std::cout << '\n';
-
-  namespace vldtr = json::validator;
-  auto validator = vldtr::any_validator{vldtr::object<vldtr::field<"x", vldtr::any>>{}};
-  auto validator2 = validator;
-  auto validator3 = std::move(validator2);
-  return validator3(obj);
 }
 
