@@ -45,16 +45,19 @@ class unique_ptr_constexpr {
     template <typename>
     friend constexpr auto make_unique_constexpr(auto&& ...);
 
-    constexpr auto copy() const -> unique_ptr_constexpr {
-      if (data) {
-        return make_unique_constexpr<T>(*data);
-      } else {
-        return nullptr;
-      }
-    }
+    constexpr auto copy() const -> unique_ptr_constexpr;
 };
 
 template <typename T>
 constexpr auto make_unique_constexpr(auto&& ...args) { return unique_ptr_constexpr<T>{new T{std::forward<decltype(args)>(args)...}}; }
+
+template <typename T>
+constexpr auto unique_ptr_constexpr<T>::copy() const -> unique_ptr_constexpr {
+  if (data) {
+    return make_unique_constexpr<T>(*data);
+  } else {
+    return nullptr;
+  }
+}
 
 #endif

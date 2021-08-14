@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "polyfill.hpp"
 #include "string_constexpr.hpp"
 #include "trie.hpp"
 #include "unique_ptr_constexpr.hpp"
@@ -27,7 +28,7 @@
 using namespace std::literals;
 
 namespace {
-  template <auto x> constexpr auto always = x;
+  template <auto x, typename ...> constexpr auto always = x;
 
   template <auto...> struct lift_to_type {};
 
@@ -100,6 +101,9 @@ namespace json {
 
   struct array;
   struct object;
+
+  auto operator<<(std::ostream& os, array const & obj) -> std::ostream&;
+  auto operator<<(std::ostream& os, object const & obj) -> std::ostream&;
 
   struct null {
     friend auto operator<<(std::ostream& os, null) -> std::ostream& {
@@ -328,7 +332,7 @@ namespace json {
     constexpr array(array&&) = default;
     constexpr array& operator=(array&&) = default;
 
-    constexpr array(std::convertible_to<value> auto&& ...vals) : vector_constexpr<value>{std::forward<decltype(vals)>(vals)...} {}
+    constexpr array(polyfill::convertible_to<value> auto&& ...vals) : vector_constexpr<value>{std::forward<decltype(vals)>(vals)...} {}
 
     friend auto operator<<(std::ostream& os, array const & arr) -> std::ostream& {
       os << "[";
@@ -682,7 +686,7 @@ namespace json {
     template <typename>
     struct in_context_t;
 
-    template <impl::is_context context, typename T> using in_context = typename in_context_t<T>::type<context>;
+    template <impl::is_context context, typename T> using in_context = typename in_context_t<T>::template type<context>;
 
     template <impl::is_decl ...Decls> struct context : private Decls... {
       private:
@@ -699,7 +703,7 @@ namespace json {
     template <impl::is_context Context, string_literal Ident>
     class lazy {
       private:
-        using type = Context::template lookup<Ident>;
+        using type = typename Context::template lookup<Ident>;
 
         unique_ptr_constexpr<type> datum;
 
@@ -724,8 +728,8 @@ namespace json {
     template <impl::is_context Context, string_literal Ident>
     struct parse_t<lazy<Context, Ident>> {
       constexpr auto operator()(json::value_const_view val) const -> lazy<Context, Ident> {
-        using type = lazy<Context, Ident>::type;
-        return make_unique_constexpr<type>(parse<type>(val));
+        using type = typename lazy<Context, Ident>::type;
+        return make_unique_constexpr<type>(parse_t<type>{}(val));
       }
     };
 
@@ -861,7 +865,7 @@ namespace json {
       constexpr auto operator()(json::value_const_view val) const -> vector_constexpr<T> {
         if (auto xs = val.as_array()) {
           auto ys = vector_constexpr<T>(xs->size());
-          std::transform(xs->begin(), xs->end(), std::back_insert_iterator{ys}, parse_t<T>{});
+          std::transform(xs->begin(), xs->end(), polyfill::back_insert_iterator{ys}, parse_t<T>{});
           return ys;
         } else {
           throw parsed_wrong_type{"Expected an array, got "s + std::string{val.debug_type()}};
@@ -869,7 +873,22 @@ namespace json {
       }
     };
 
-    constexpr auto untyped(vector_constexpr<auto> x) -> json::array { throw 0;/* TODO */ }
+    template <typename T> constexpr auto untyped(vector_constexpr<T> const & arr) -> json::array {
+      auto res = json::array{};
+      std::transform(arr.begin(), arr.end(), polyfill::back_insert_iterator{res}, [](auto&& x) { return untyped(std::forward<decltype(x)>(x)); });
+      return res;
+    }
+
+    template <typename T> constexpr auto untyped(vector_constexpr<T>&& arr) -> json::array {
+      auto res = json::array{};
+      std::transform
+        ( std::move_iterator{arr.begin()}
+        , std::move_iterator{arr.end()}
+        , polyfill::back_insert_iterator{res}
+        , [](auto&& x) { return untyped(std::forward<decltype(x)>(x)); }
+        );
+      return res;
+    }
 
     template <typename T> struct to_schema_t<vector_constexpr<T>> { static constexpr auto _schema() { return schema::array{to_schema<T>()}; } };
 
@@ -889,7 +908,7 @@ namespace json {
       }
     };
 
-    constexpr auto untyped(trie<auto> x) -> json::object { return x; }
+    template <typename T> constexpr auto untyped(trie<T> x) -> json::object { return x; }
 
     template <typename T> struct to_schema_t<trie<T>> { static constexpr auto _schema() { return schema::dict{to_schema<T>()}; } };
 
@@ -998,14 +1017,12 @@ namespace json {
   
     template <impl::is_field ...Fields>
     constexpr auto untyped(object<Fields...> const & obj) {
-      throw 0; // TODO
-      //return json::object{std::pair{Fields::tag, obj.get<Fields::tag>().untyped()}...};
+      return json::object{std::pair{Fields::tag, obj.template get<Fields::tag>().untyped()}...};
     }
         
     template <impl::is_field ...Fields>
     constexpr auto untyped(object<Fields...> && obj) {
-      throw 0; // TODO
-      //return json::object{std::pair{Fields::tag, std::move(obj).template get<Fields::tag>().untyped()}...};
+      return json::object{std::pair{Fields::tag, std::move(obj).template get<Fields::tag>().untyped()}...};
     }
 
     template <impl::is_field ...Fields>
@@ -1132,6 +1149,8 @@ namespace json {
       template <typename ...MatchCases>
       struct get_match_case : MatchCases... {
         using MatchCases::get_func...;
+
+        constexpr get_match_case(MatchCases ...cases) : MatchCases{cases}... {}
       };
 
       template <typename From, typename To, typename>
@@ -1242,17 +1261,18 @@ namespace json {
             static constexpr auto get(char const *, json::object const &) -> discriminated_union<Discriminator, Cases...> requires (!CaseConstructors::leaf && ... && true) {
               throw parsed_wrong_type{"Invalid tag value"};
             }
+
+            using func_ptr = auto (*)(char const *, json::object const &) -> discriminated_union<Discriminator, Cases...>;
   
             template <char c>
-            static constexpr auto advance_then_lookup = tag_trie<typename CaseConstructors::template advance<c>...>::lookup;
+            static constexpr func_ptr advance_then_lookup = tag_trie<typename CaseConstructors::template advance<c>...>::lookup;
   
           public:
             static constexpr auto lookup(char const * tag, json::object const & x) -> discriminated_union<Discriminator, Cases...> {
               if constexpr ((CaseConstructors::done && ... && true)) {
                 throw parsed_wrong_type{"Invalid tag value"};
               } else {
-                using func_ptr = auto (*)(char const *, json::object const &) -> discriminated_union<Discriminator, Cases...>;
-                constexpr auto fs = std::array{static_cast<func_ptr>(get), advance_then_lookup<cs>...};
+                constexpr auto fs = std::array<func_ptr, 1 + sizeof...(cs)>{static_cast<func_ptr>(get), advance_then_lookup<cs>...};
                 return fs[static_cast<unsigned char>(*tag)](tag + 1, x);
               }
             }
@@ -1340,7 +1360,7 @@ namespace json {
         if constexpr (schema.starts_with(Token)) {
           return schema.template substr<Token.size>();
         } else {
-          static_assert(always<false>, "Parse error");
+          static_assert(always<false, lift_to_type<Schema>>, "Parse error");
         }
       }
 
@@ -1354,7 +1374,7 @@ namespace json {
           constexpr auto schema1 = schema.template substr<ident_end - ident_begin>();
           return parse_non_type_result<ident, schema1>{};
         } else {
-          static_assert(always<false>, "Parse error");
+          static_assert(always<false, lift_to_type<Schema>>, "Parse error");
         }
       }
 
@@ -1372,14 +1392,14 @@ namespace json {
         }
       }
 
-      template <template <bool, string_literal> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
+      template <template <bool, string_literal, bool = false> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
       constexpr auto parse_fields() {
         if constexpr (Schema.starts_with('}')) {
           return parse_fields_result<Schema.template substr<1>(), Accum...>{};
         } else {
           using field_name = decltype(parse_field_name<Schema>());
           constexpr auto schema1 = parse_token<field_name::rest, ":">();
-          using field_type = parse_schema<is_rec, schema1>::parse;
+          using field_type = typename parse_schema<is_rec, schema1>::parse;
           using _field = std::conditional_t
             < is_rec
             , rec_field<field_name::value, typename field_type::type>
@@ -1391,12 +1411,12 @@ namespace json {
           } else if constexpr (schema2.starts_with('}')) {
             return parse_fields_result<schema2.template substr<1>(), Accum..., _field>{};
           } else {
-            static_assert(always<false>, "Fields parse failed");
+            static_assert(always<false, lift_to_type<Schema>>, "Fields parse failed");
           }
         }
       }
 
-      template <template <bool, string_literal> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
+      template <template <bool, string_literal, bool = false> typename parse_schema, bool is_rec, string_literal Schema, typename ...Accum>
       constexpr auto parse_cases() {
         if constexpr (Schema.starts_with('>')) {
           return parse_fields_result<Schema.template substr<1>(), Accum...>{};
@@ -1418,7 +1438,7 @@ namespace json {
           } else if constexpr (schema3.starts_with('>')) {
             return parse_fields_result<schema3.template substr<1>(), Accum..., typename decltype(_case)::type>{};
           } else {
-            static_assert(always<false>, "Cases parse failed");
+            static_assert(always<false, lift_to_type<Schema>>, "Cases parse failed");
           }
         }
       }
@@ -1448,12 +1468,12 @@ namespace json {
             } else if constexpr (schema.starts_with("bool")) {
               return parse_result<bool, schema.template substr<4>()>{};
             } else if constexpr (schema.starts_with("[")) {
-              using elements = parse_schema<is_rec, schema.template substr<1>()>::parse;
+              using elements = typename parse_schema<is_rec, schema.template substr<1>()>::parse;
               constexpr auto schema1 = parse_token<elements::rest, "]">();
               return parse_result<vector_constexpr<typename elements::type>, schema1>{};
             } else if constexpr (schema.starts_with("dict")) {
               constexpr auto schema1 = parse_token<schema.template substr<4>(), "<">();
-              using elements = parse_schema<is_rec, schema1>::parse;
+              using elements = typename parse_schema<is_rec, schema1>::parse;
               constexpr auto schema2 = parse_token<elements::rest, ">">();
               return parse_result<trie<typename elements::type>, schema2>{};
             } else if constexpr (schema.starts_with("{")) {
@@ -1475,7 +1495,7 @@ namespace json {
                 }
               }(parse_cases<parse_schema, is_rec, schema1>());
             } else {
-              static_assert(always<false>, "schema parse failed");
+              static_assert(always<false, lift_to_type<Schema>>, "schema parse failed");
             }
           }
   
@@ -1493,7 +1513,7 @@ namespace json {
         } else {
           using ident = decltype(parse_ident<schema>());
           constexpr auto schema1 = parse_token<ident::rest, "=">();
-          using type = parse_schema<true, schema1>::parse;
+          using type = typename parse_schema<true, schema1>::parse;
           using _decl = decl<ident::value, typename type::type>;
           return parse_context<type::rest, Accum..., _decl>();
         }
@@ -1501,7 +1521,7 @@ namespace json {
     }
 
     template <string_literal Schema>
-    using parse_schema = impl::parse_schema<false, Schema, true>::parse::type;
+    using parse_schema = typename impl::parse_schema<false, Schema, true>::parse::type;
 
     template <string_literal Schema>
     using parse_context = decltype(impl::parse_context<Schema>());

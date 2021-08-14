@@ -21,6 +21,11 @@ class trie {
     std::array<unique_ptr_constexpr<trie>, factor> nexts;
 
   public:
+    constexpr void swap(trie& lhs, trie& rhs) {
+      std::swap(lhs.here, rhs.here);
+      std::swap(lhs.nexts, rhs.nexts);
+    }
+
     constexpr trie() = default;
 
     constexpr trie(trie const & that)
@@ -32,9 +37,13 @@ class trie {
         }
       {}
 
-    constexpr trie& operator=(trie const &) = delete; // TODO
+    constexpr trie& operator=(trie const & that) {
+      auto tmp = that;
+      swap(*this, tmp);
+      return *this;
+    }
 
-    // TODO compiler bug?
+    // TODO compiler bug? The default version should work
     constexpr trie(trie&& that) noexcept
       : here{std::move(that.here)}
       , nexts
@@ -69,7 +78,7 @@ class trie {
         std::vector<trie const *> path;
 
         void step() {
-          auto next = std::find_if(path.back()->nexts.begin(), path.back()->nexts.end(), std::identity{});
+          auto next = std::find_if(path.back()->nexts.begin(), path.back()->nexts.end(), [](auto const & x) -> auto const & { return x; });
           while (next == path.back()->nexts.end()) {
             auto last = key.back();
             key.pop_back();
@@ -79,7 +88,7 @@ class trie {
               return;
             }
 
-            next = std::find_if(path.back()->nexts.begin() + last + 1, path.back()->nexts.end(), std::identity{});
+            next = std::find_if(path.back()->nexts.begin() + last + 1, path.back()->nexts.end(), [](auto const & x) -> auto const & { return x; });
           }
 
           key.push_back(next - path.back()->nexts.begin());

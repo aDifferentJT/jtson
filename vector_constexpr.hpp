@@ -36,7 +36,7 @@ class vector_constexpr : private Allocator {
     constexpr auto operator[](std::size_t i) -> T & {
       if (std::is_constant_evaluated()) {
         if (i < 0 || i >= _size) {
-          throw std::out_of_range{};
+          throw std::out_of_range{""};
         }
       }
       return _data[i];
@@ -45,7 +45,7 @@ class vector_constexpr : private Allocator {
     constexpr auto operator[](std::size_t i) const -> T const & {
       if (std::is_constant_evaluated()) {
         if (i < 0 || i >= _size) {
-          throw std::out_of_range{};
+          throw std::out_of_range{""};
         }
       }
       return _data[i];
@@ -90,12 +90,6 @@ class vector_constexpr : private Allocator {
       _size = that.size();
     }
 
-    constexpr vector_constexpr& operator=(vector_constexpr const & that) {
-      auto tmp = that;
-      swap(*this, tmp);
-      return *this;
-    }
-
     constexpr vector_constexpr(vector_constexpr&& that)
       : Allocator{static_cast<Allocator const &>(that)}
       , _data{std::exchange(that._data, nullptr)}
@@ -103,9 +97,8 @@ class vector_constexpr : private Allocator {
       , _capacity{std::exchange(that._capacity, 0)}
       {}
 
-    constexpr vector_constexpr& operator=(vector_constexpr&& that) {
-      auto tmp = std::move(that);
-      swap(*this, tmp);
+    constexpr vector_constexpr& operator=(vector_constexpr that) {
+      swap(*this, that);
       return *this;
     }
 

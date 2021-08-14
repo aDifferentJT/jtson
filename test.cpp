@@ -115,7 +115,7 @@ constexpr auto test() {
 
   [[maybe_unused]] auto provider_schema = json::typed::to_schema<provider_type>;
 
-  auto obj2 = json::parse("[null, \"foo\", false, true, {foo:true, \"bar 2\":false}]");
+  auto obj2 = json::parse(R"([null, "foo", false, true, {foo:true, "bar 2":false}])");
 
   auto obj = json::object
     { std::pair{"tag", "foo"_jstr}
@@ -142,7 +142,7 @@ constexpr auto test() {
     ( json::typed::match_case<"foo">
       ([](json::typed::object<json::typed::field<"x", long>>) {})
     , json::typed::match_case<"bar">
-      ([](json::typed::object<json::typed::field<"y", json::value>>) {})
+      ([](json::typed::object<json::typed::field<"y", json::value>> const &) {})
     );
 
   auto typed_rec = make_list();
@@ -155,7 +155,7 @@ int main() {
 
   [[maybe_unused]] constexpr auto x = test();
 
-  auto obj2 = json::parse("[null, \"foo\", false, true, {foo:true, \"bar 2\":false}]");
+  auto obj2 = json::parse(R"([null, "foo", false, true, {foo:true, "bar 2":false}])");
   std::cout << obj2 << '\n';
 
   auto obj = json::object
