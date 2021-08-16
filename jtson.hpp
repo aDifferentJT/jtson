@@ -21,7 +21,6 @@
 #include "string_constexpr.hpp"
 #include "trie.hpp"
 #include "unique_ptr_constexpr.hpp"
-#include "unique_ptr_soo.hpp"
 #include "variant_constexpr.hpp"
 #include "vector_constexpr.hpp"
 
@@ -45,7 +44,7 @@ namespace {
     constexpr auto operator[](std::size_t i) const { return value[i]; }
 
     template <std::size_t pos = 0, std::size_t count = std::numeric_limits<std::size_t>::max()>
-    constexpr auto substr() const {
+    [[nodiscard]] constexpr auto substr() const {
       constexpr auto _count = std::min(count, size - pos);
       char res[_count + 1];
       std::copy_n(value + pos, _count, res);
@@ -53,22 +52,22 @@ namespace {
       return string_literal<_count + 1>{res};
     }
 
-    constexpr auto empty() const { return size == 0; }
+    [[nodiscard]] constexpr auto empty() const { return size == 0; }
 
     constexpr auto begin()       -> char       * { return value; }
-    constexpr auto begin() const -> char const * { return value; }
+    [[nodiscard]] constexpr auto begin() const -> char const * { return value; }
     constexpr auto end()       -> char       * { return value + size; }
-    constexpr auto end() const -> char const * { return value + size; }
+    [[nodiscard]] constexpr auto end() const -> char const * { return value + size; }
 
-    constexpr auto view() const { return std::string_view{value, size}; }
+    [[nodiscard]] constexpr auto view() const { return std::string_view{value, size}; }
     constexpr operator std::string_view() const { return view(); }
 
-    constexpr auto find(std::string_view str) const { return view().find(str); }
-    constexpr auto find(char ch) const { return view().find(ch); }
-    constexpr auto starts_with(std::string_view prefix) const { return view().starts_with(prefix); }
-    constexpr auto starts_with(char ch) const { return view().starts_with(ch); }
+    [[nodiscard]] constexpr auto find(std::string_view str) const { return view().find(str); }
+    [[nodiscard]] constexpr auto find(char ch) const { return view().find(ch); }
+    [[nodiscard]] constexpr auto starts_with(std::string_view prefix) const { return view().starts_with(prefix); }
+    [[nodiscard]] constexpr auto starts_with(char ch) const { return view().starts_with(ch); }
 
-    constexpr auto find_first_non_whitespace() const { return view().find_first_not_of(" \n"); }
+    [[nodiscard]] constexpr auto find_first_non_whitespace() const { return view().find_first_not_of(" \n"); }
   };
 
   template <string_literal str>
@@ -201,14 +200,14 @@ namespace json {
           : datum{that.datum.template visit<variant_type>([](auto& x) -> variant_type { return variant_type{ptr::construct(*x)}; })}
           {}
 
-        constexpr basic_value& operator=(basic_value const & that) {
+        constexpr auto operator=(basic_value const & that) -> basic_value& {
           auto tmp = that;
           std::swap(*this, tmp);
           return *this;
         }
 
-        constexpr basic_value(basic_value&&) = default;
-        constexpr basic_value& operator=(basic_value&&) = default;
+        constexpr basic_value(basic_value&&) noexcept = default;
+        constexpr auto operator=(basic_value&&) noexcept -> basic_value& = default;
 
         constexpr basic_value(auto&& x) requires (variant_type::template is_of_variant<ptr_t<std::decay_t<decltype(x)>>>) : datum{ptr::construct(std::forward<decltype(x)>(x))} {};
 
@@ -220,22 +219,22 @@ namespace json {
         }
         constexpr basic_value(bool x) : datum{ptr::construct(x)} {};
 
-        constexpr auto is_null() const {
+        [[nodiscard]] constexpr auto is_null() const {
           return datum.template holds<ptr_t<null>>();
         }
 
-        constexpr auto is_number() const {
+        [[nodiscard]] constexpr auto is_number() const {
           return
             (  datum.template holds<ptr_t<long>>()
             || datum.template holds<ptr_t<double>>()
             );
         }
 
-        constexpr auto is_string() const {
+        [[nodiscard]] constexpr auto is_string() const {
           return datum.template holds<ptr_t<string>>();
         }
 
-        constexpr auto as_int() const -> long const * {
+        [[nodiscard]] constexpr auto as_int() const -> long const * {
           if (auto x = datum.template get_if<ptr_t<long>>()) {
             return &**x;
           } else {
@@ -243,7 +242,7 @@ namespace json {
           }
         }
 
-        constexpr auto as_float() const -> double const * {
+        [[nodiscard]] constexpr auto as_float() const -> double const * {
           if (auto x = datum.template get_if<ptr_t<double>>()) {
             return &**x;
           } else {
@@ -251,7 +250,7 @@ namespace json {
           }
         }
 
-        constexpr auto as_string() const -> string const * {
+        [[nodiscard]] constexpr auto as_string() const -> string const * {
           if (auto x = datum.template get_if<ptr_t<string>>()) {
             return &**x;
           } else {
@@ -259,7 +258,7 @@ namespace json {
           }
         }
 
-        constexpr auto as_bool() const -> bool const * {
+        [[nodiscard]] constexpr auto as_bool() const -> bool const * {
           if (auto x = datum.template get_if<ptr_t<bool>>()) {
             return &**x;
           } else {
@@ -267,7 +266,7 @@ namespace json {
           }
         }
 
-        constexpr auto as_array() const -> array const * {
+        [[nodiscard]] constexpr auto as_array() const -> array const * {
           if (auto x = datum.template get_if<ptr_t<array>>()) {
             return &**x;
           } else {
@@ -275,7 +274,7 @@ namespace json {
           }
         }
 
-        constexpr auto as_object() const -> object const * {
+        [[nodiscard]] constexpr auto as_object() const -> object const * {
           if (auto x = datum.template get_if<ptr_t<object>>()) {
             return &**x;
           } else {
@@ -283,7 +282,7 @@ namespace json {
           }
         }
 
-        constexpr auto debug_type() const {
+        [[nodiscard]] constexpr auto debug_type() const {
           return
             datum.template match<std::string_view>
               ( [](ptr_t<null>   const &) { return "null"; }
@@ -326,11 +325,11 @@ namespace json {
 
   struct array : vector_constexpr<value> {
     constexpr array(array&) = default;
-    constexpr array& operator=(array&) = default;
+    constexpr auto operator=(array&) -> array& = default;
     constexpr array(array const &) = default;
-    constexpr array& operator=(array const &) = default;
+    constexpr auto operator=(array const &) -> array& = default;
     constexpr array(array&&) = default;
-    constexpr array& operator=(array&&) = default;
+    constexpr auto operator=(array&&) -> array& = default;
 
     constexpr array(polyfill::convertible_to<value> auto&& ...vals) : vector_constexpr<value>{std::forward<decltype(vals)>(vals)...} {}
 
@@ -605,14 +604,14 @@ namespace json {
 
       constexpr array(array const & that) : elements{make_unique_constexpr<schema>(*that.elements)} {}
 
-      constexpr array& operator=(array const & that) {
+      constexpr auto operator=(array const & that) -> array& {
         auto tmp = that;
         swap(*this, tmp);
         return *this;
       }
 
       constexpr array(array&&) = default;
-      constexpr array& operator=(array&&) = default;
+      constexpr auto operator=(array&&) -> array& = default;
     };
 
     struct dict {
@@ -626,14 +625,14 @@ namespace json {
 
       constexpr dict(dict const & that) : elements{make_unique_constexpr<schema>(*that.elements)} {}
 
-      constexpr dict& operator=(dict const & that) {
+      constexpr auto operator=(dict const & that) -> dict& {
         auto tmp = that;
         swap(*this, tmp);
         return *this;
       }
 
       constexpr dict(dict&&) = default;
-      constexpr dict& operator=(dict&&) = default;
+      constexpr auto operator=(dict&&) -> dict& = default;
     };
 
     struct object : trie<schema> { using trie<schema>::trie; };
@@ -645,11 +644,11 @@ namespace json {
     variant_type data;
 
     constexpr schema(schema&) = default;
-    constexpr schema& operator=(schema&) = default;
+    constexpr auto operator=(schema&) -> schema& = default;
     constexpr schema(schema const &) = default;
-    constexpr schema& operator=(schema const &) = default;
+    constexpr auto operator=(schema const &) -> schema& = default;
     constexpr schema(schema&&) = default;
-    constexpr schema& operator=(schema&&) = default;
+    constexpr auto operator=(schema&&) -> schema& = default;
 
     constexpr schema(auto&& ...args) : data{std::forward<decltype(args)>(args)...} {}
   };
@@ -945,7 +944,7 @@ namespace json {
           {}
   
         constexpr auto get_field(lift_to_type<Name>) &       -> auto &       { return datum; }
-        constexpr auto get_field(lift_to_type<Name>) const & -> auto const & { return datum; }
+        [[nodiscard]] constexpr auto get_field(lift_to_type<Name>) const & -> auto const & { return datum; }
         constexpr auto get_field(lift_to_type<Name>) &&      -> auto &&      { return datum; }
     };
 
@@ -984,7 +983,7 @@ namespace json {
         }
 
         template <string_literal Name>
-        constexpr auto get() const & -> auto const & {
+        [[nodiscard]] constexpr auto get() const & -> auto const & {
           return get_field(lift_to_type<Name>{});
         }
 
@@ -1076,7 +1075,7 @@ namespace json {
 
     template <string_literal Tag, typename CRTP>
     struct match_case_base {
-      constexpr auto get_func(lift_to_type<Tag>) const -> auto const & {
+      [[nodiscard]] constexpr auto get_func(lift_to_type<Tag>) const -> auto const & {
         return static_cast<CRTP const *>(this)->f;
       }
     };
@@ -1200,7 +1199,7 @@ namespace json {
         }
 
         template <string_literal Tag>
-        constexpr auto get_if() const -> auto const * {
+        [[nodiscard]] constexpr auto get_if() const -> auto const * {
           return get_if<impl::type_from_cases<Cases...>::template type<Tag>>();
         }
 

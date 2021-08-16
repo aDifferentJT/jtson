@@ -14,9 +14,9 @@ namespace variant_impl {
 
   template <std::size_t I, typename T, typename CRTP>
   struct helper {
-    constexpr auto get_index(tag<T>) const -> std::size_t { return I; }
+    [[nodiscard]] constexpr auto get_index(tag<T>) const -> std::size_t { return I; }
 
-    constexpr auto holds(tag<T>) const -> bool {
+    [[nodiscard]] constexpr auto holds(tag<T>) const -> bool {
       auto _this = static_cast<CRTP const *>(this);
       return _this->_index == I;
     }
@@ -30,7 +30,7 @@ namespace variant_impl {
       }
     }
 
-    constexpr auto get_if(tag<T>) const -> T const * {
+    [[nodiscard]] constexpr auto get_if(tag<T>) const -> T const * {
       auto _this = static_cast<CRTP const *>(this);
       if (_this->_index == I) {
         return &_this->data.template get<T>();
@@ -56,10 +56,10 @@ namespace variant_impl {
       template <typename U>
       constexpr variant_union(U&& x) : variant_union{std::bool_constant<std::is_same_v<T, std::decay_t<U>>>{}, std::forward<decltype(x)>(x)} {}
 
-      constexpr ~variant_union() {}
+      constexpr ~variant_union() {};
   
       template <typename U>
-      constexpr auto get() & -> U& {
+      [[nodiscard]] constexpr auto get() & -> U& {
         if constexpr (std::is_same_v<T, U>) {
           return first;
         } else {
@@ -68,7 +68,7 @@ namespace variant_impl {
       }
   
       template <typename U>
-      constexpr auto get() const & -> U const & {
+      [[nodiscard]] constexpr auto get() const & -> U const & {
         if constexpr (std::is_same_v<T, U>) {
           return first;
         } else {
@@ -77,7 +77,7 @@ namespace variant_impl {
       }
   
       template <typename U>
-      constexpr auto get() && -> U&& {
+      [[nodiscard]] constexpr auto get() && -> U&& {
         if constexpr (std::is_same_v<T, U>) {
           return std::move(first);
         } else {
@@ -117,12 +117,12 @@ class variant_constexpr_indexed<std::index_sequence<Is...>, Ts...> : private var
       , _index{get_index(variant_impl::tag<std::decay_t<decltype(x)>>{})}
       {}
 
-    constexpr auto index() const { return _index; }
+    [[nodiscard]] constexpr auto index() const { return _index; }
 
-    template <typename T> constexpr auto holds() const { return holds(variant_impl::tag<T>{}); }
+    template <typename T> [[nodiscard]] constexpr auto holds() const { return holds(variant_impl::tag<T>{}); }
 
-    template <typename T> constexpr auto get_if()       { return get_if(variant_impl::tag<T>{}); }
-    template <typename T> constexpr auto get_if() const { return get_if(variant_impl::tag<T>{}); }
+    template <typename T> [[nodiscard]] constexpr auto get_if()       { return get_if(variant_impl::tag<T>{}); }
+    template <typename T> [[nodiscard]] constexpr auto get_if() const { return get_if(variant_impl::tag<T>{}); }
 
     template <typename Ret>
     constexpr auto visit(auto const & f) & -> Ret {
@@ -174,7 +174,7 @@ class variant_constexpr_indexed<std::index_sequence<Is...>, Ts...> : private var
       std::move(that).template visit<void>([this] <typename T> (T&& x) { std::construct_at(&data, std::move(x)); });
     }
 
-    constexpr variant_constexpr_indexed& operator=(variant_constexpr_indexed const & that) {
+    constexpr auto operator=(variant_constexpr_indexed const & that) -> variant_constexpr_indexed& {
       if (&that != this) {
         visit<void>([](auto& x) { std::destroy_at(&x); });
         std::destroy_at(&data);
@@ -182,7 +182,7 @@ class variant_constexpr_indexed<std::index_sequence<Is...>, Ts...> : private var
       }
     }
 
-    constexpr variant_constexpr_indexed& operator=(variant_constexpr_indexed&& that) {
+    constexpr auto operator=(variant_constexpr_indexed&& that) noexcept -> variant_constexpr_indexed& {
       visit<void>([](auto& x) { std::destroy_at(&x); });
       std::destroy_at(&data);
       std::move(that).template visit<void>([this] <typename T> (T&& x) { std::construct_at(&data, std::move(x)); });

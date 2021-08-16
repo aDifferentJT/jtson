@@ -1,0 +1,4 @@
+Checks: "clang-analyzer-*,cppcoreguidelines-*,misc-*,modernize-*,performance-*,-cppcoreguidelines-avoid-c-arrays,-cppcoreguidelines-avoid-magic-numbers,-cppcoreguidelines-pro-bounds-array-to-pointer-decay,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-bounds-constant-array-index,-cppcoreguidelines-pro-type-union-access,-misc-no-recursion,-misc-non-private-member-variables-in-classes,-modernize-avoid-c-arrays,-modernize-use-nodiscard"
+CheckOptions:
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: value_const_view

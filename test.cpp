@@ -150,7 +150,7 @@ constexpr auto test() {
   return typed_obj.get<"x">();
 }
 
-int main() {
+auto main() -> int {
   using namespace json::literals;
 
   [[maybe_unused]] constexpr auto x = test();

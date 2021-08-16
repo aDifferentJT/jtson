@@ -5,7 +5,7 @@
 template <typename T>
 class unique_ptr_constexpr {
   private:
-    T* data;
+    T* data{nullptr};
 
     constexpr unique_ptr_constexpr(T* data) : data{data} {}
 
@@ -14,15 +14,15 @@ class unique_ptr_constexpr {
       std::swap(lhs.data, rhs.data);
     }
 
-    constexpr unique_ptr_constexpr() : data{nullptr} {}
-    constexpr unique_ptr_constexpr(std::nullptr_t) : data{nullptr} {}
+    constexpr unique_ptr_constexpr() = default;
+    constexpr unique_ptr_constexpr(std::nullptr_t) {}
 
     unique_ptr_constexpr(unique_ptr_constexpr const &) = delete;
-    unique_ptr_constexpr& operator=(unique_ptr_constexpr const &) = delete;
+    auto operator=(unique_ptr_constexpr const &) -> unique_ptr_constexpr& = delete;
 
     constexpr unique_ptr_constexpr(unique_ptr_constexpr&& that) noexcept : data{std::exchange(that.data, nullptr)} {}
 
-    constexpr unique_ptr_constexpr& operator=(unique_ptr_constexpr&& that) noexcept {
+    constexpr auto operator=(unique_ptr_constexpr&& that) noexcept -> unique_ptr_constexpr& {
       auto tmp = std::move(that);
       swap(*this, tmp);
       return *this;
@@ -33,7 +33,7 @@ class unique_ptr_constexpr {
     constexpr operator bool() const { return data; }
 
     constexpr auto get()       -> T       * { return data; }
-    constexpr auto get() const -> T const * { return data; }
+    [[nodiscard]] constexpr auto get() const -> T const * { return data; }
 
     constexpr auto operator*()       &  -> T       &  { return *data; }
     constexpr auto operator*() const &  -> T const &  { return *data; }
@@ -45,7 +45,7 @@ class unique_ptr_constexpr {
     template <typename>
     friend constexpr auto make_unique_constexpr(auto&& ...);
 
-    constexpr auto copy() const -> unique_ptr_constexpr;
+    [[nodiscard]] constexpr auto copy() const -> unique_ptr_constexpr;
 };
 
 template <typename T>

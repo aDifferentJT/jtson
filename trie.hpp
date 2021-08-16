@@ -37,7 +37,7 @@ class trie {
         }
       {}
 
-    constexpr trie& operator=(trie const & that) {
+    constexpr auto operator=(trie const & that) -> trie& {
       auto tmp = that;
       swap(*this, tmp);
       return *this;
@@ -53,7 +53,7 @@ class trie {
         }
       {}
 
-    constexpr trie& operator=(trie&&) = default;
+    constexpr auto operator=(trie&&) noexcept -> trie& = default;
 
     template <typename U>
     constexpr trie(auto const & f, trie<U> const & that)
@@ -75,7 +75,7 @@ class trie {
     class const_it {
       private:
         std::string key;
-        std::vector<trie const *> path;
+        std::vector<trie const *> path{};
 
         void step() {
           auto next = std::find_if(path.back()->nexts.begin(), path.back()->nexts.end(), [](auto const & x) -> auto const & { return x; });
@@ -105,7 +105,7 @@ class trie {
           advance_to_active();
         }
 
-        const_it() : path{} {}
+        const_it() = default;
 
       public:
         constexpr auto operator*() const {
@@ -133,8 +133,8 @@ class trie {
         friend class trie;
     };
 
-    constexpr auto begin() const { return const_it{this}; }
-    constexpr auto end()   const { return const_it{}; }
+    [[nodiscard]] constexpr auto begin() const { return const_it{this}; }
+    [[nodiscard]] constexpr auto end()   const { return const_it{}; }
 
     constexpr void emplace(std::string_view key, auto&& ...args) {
       if (key.size() == 0) {
@@ -171,7 +171,7 @@ class trie {
       }
     }
 
-    constexpr auto get_if(std::string_view key) const -> T const * {
+    [[nodiscard]] constexpr auto get_if(std::string_view key) const -> T const * {
       if (key.size() == 0) {
         if (here) {
           return &*here;

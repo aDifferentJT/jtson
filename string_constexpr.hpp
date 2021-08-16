@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <utility>
 
+#include <gsl/gsl>
+
 class string_constexpr {
   private:
     static constexpr char empty[] = "";
-    char const * data;
-    std::size_t size;
+    gsl::owner<char const *> data = empty;
+    std::size_t size = 0;
 
   public:
     friend constexpr void swap(string_constexpr& lhs, string_constexpr& rhs) {
@@ -16,7 +18,7 @@ class string_constexpr {
       std::swap(lhs.size, rhs.size);
     }
 
-    constexpr string_constexpr() : data{empty}, size{0} {}
+    constexpr string_constexpr() = default;
 
     constexpr string_constexpr(std::string_view sv)
       : data
@@ -30,23 +32,23 @@ class string_constexpr {
       , size{sv.size()}
       {}
 
-    constexpr auto view() const { return std::string_view{data, size}; }
+    [[nodiscard]] constexpr auto view() const { return std::string_view{data, size}; }
 
     constexpr string_constexpr(string_constexpr const & that) : string_constexpr{that.view()} {}
 
-    constexpr string_constexpr(string_constexpr&& that)
+    constexpr string_constexpr(string_constexpr&& that) noexcept
       : data{std::exchange(that.data, empty)}
       , size{std::exchange(that.size, 0)}
       {}
 
-    constexpr string_constexpr& operator=(string_constexpr that) {
+    constexpr auto operator=(string_constexpr that) -> string_constexpr& {
       swap(*this, that);
       return *this;
     }
 
     constexpr ~string_constexpr() { if (data != empty) { delete[] data; } }
 
-    constexpr auto c_str() const -> char const * { return data; }
+    [[nodiscard]] constexpr auto c_str() const -> char const * { return data; }
 
     constexpr operator std::string_view() const { return view(); }
 
